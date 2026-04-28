@@ -59,11 +59,11 @@ labs:
     lab_name: Poliana
     sheet: Sheet1
     header_row: 3
-    # Poliana: header pe rand 3, col F = Pret lista (fara oferta), col G = OFERTA PRET
+    # Poliana: header pe rand 3, col F = Pret lista, col G = OFERTA PRET (folosim G - pretul cu reducere)
     columns_by_position:
       2: denumire    # col B = Denumire
       5: categorie   # col E = Subgrup
-      6: pret        # col F = Pret (pret de lista, fara oferta)
+      7: pret        # col G = OFERTA PRET (pretul cu reducere)
       8: timp        # col H = Timp executie (zile)
 
   - file: Solomed
