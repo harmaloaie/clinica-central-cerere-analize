@@ -8,7 +8,8 @@ var DATA = window.__ANALIZE_DATA__ || [];
 var DETAILS = {
   "Clinica Sante": window.__DETAILS_SANTE__ || {},
   "Binisan":       window.__DETAILS_BINISAN__ || {},
-  "Poliana":       window.__DETAILS_POLIANA__ || {}
+  "Poliana":       window.__DETAILS_POLIANA__ || {},
+  "Solomed":       window.__DETAILS_SOLOMED__ || {}
 };
 
 var DEFAULT_DISCOUNTS = {

@@ -272,16 +272,18 @@
 // Simple data loader — no encryption, no login
 (async function(){
   try {
-    const [dataResp, santeResp, binisanResp, polianaResp] = await Promise.all([
+    const [dataResp, santeResp, binisanResp, polianaResp, solomedResp] = await Promise.all([
       fetch("assets/data/analize.json"),
       fetch("assets/data/details_sante.json").catch(() => null),
       fetch("assets/data/details_binisan.json").catch(() => null),
-      fetch("assets/data/details_poliana.json").catch(() => null)
+      fetch("assets/data/details_poliana.json").catch(() => null),
+      fetch("assets/data/details_solomed.json").catch(() => null)
     ]);
     window.__ANALIZE_DATA__ = await dataResp.json();
     window.__DETAILS_SANTE__ = santeResp && santeResp.ok ? await santeResp.json() : {};
     window.__DETAILS_BINISAN__ = binisanResp && binisanResp.ok ? await binisanResp.json() : {};
     window.__DETAILS_POLIANA__ = polianaResp && polianaResp.ok ? await polianaResp.json() : {};
+    window.__DETAILS_SOLOMED__ = solomedResp && solomedResp.ok ? await solomedResp.json() : {};
   } catch (e) {
     console.error("Eroare incarcare date:", e);
     document.body.innerHTML = '<div style="padding:40px;text-align:center;font-family:sans-serif">Eroare la incarcarea datelor. Verifica consola browser-ului.</div>';
