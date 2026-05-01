@@ -9,7 +9,8 @@ var DETAILS = {
   "Clinica Sante": window.__DETAILS_SANTE__ || {},
   "Binisan":       window.__DETAILS_BINISAN__ || {},
   "Poliana":       window.__DETAILS_POLIANA__ || {},
-  "Solomed":       window.__DETAILS_SOLOMED__ || {}
+  "Solomed":       window.__DETAILS_SOLOMED__ || {},
+  "Medilab":       window.__DETAILS_MEDILAB__ || {}
 };
 
 var DEFAULT_DISCOUNTS = {
