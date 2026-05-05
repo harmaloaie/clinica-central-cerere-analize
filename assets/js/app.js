@@ -61,6 +61,50 @@ function fmtRecipient(d) {
   return parts.join(" — ");
 }
 
+// Build summary of physical tubes needed.
+// Rule: 1 tube per (location, recipient_type) — analize at the SAME location with SAME tube type share one tube.
+// "Location" comes from LaboratorSubcontractant (where the sample is physically processed).
+// If a lab has no LaboratorSubcontractant in details, we fall back to the lab name.
+// items: array of { offer: { Laborator, Denumire }, ... }
+// Returns: array of { tip, count, breakdown: { location: count } } sorted by count desc
+function buildEprubetSummary(items) {
+  // Step 1: per (location, tip_eprubeta) — collect unique tubes
+  var locTubeSet = {};  // key: location + "|||" + tip → { location, tip }
+  var locTubeAnalize = {};  // key → array of denumiri (for tooltip / detail)
+
+  for (var i = 0; i < items.length; i++) {
+    var lab = items[i].offer.Laborator;
+    var d = getDetails(lab, items[i].offer.Denumire);
+    if (!d) continue;  // no detail = unknown tube → skip
+    var tip = fmtRecipient(d);
+    if (!tip) continue;
+    // Use location from details, fallback to lab name
+    var loc = d.LaboratorSubcontractant || lab;
+    var key = loc + "|||" + tip;
+    if (!locTubeSet[key]) {
+      locTubeSet[key] = { location: loc, tip: tip };
+      locTubeAnalize[key] = [];
+    }
+    locTubeAnalize[key].push(items[i].offer.Denumire);
+  }
+
+  // Step 2: aggregate by tip → count tubes (= unique locations per tip)
+  var byTip = {};  // tip → { count, breakdown: {location: count}, denumiri: [...] }
+  var keys = Object.keys(locTubeSet);
+  for (var k = 0; k < keys.length; k++) {
+    var entry = locTubeSet[keys[k]];
+    if (!byTip[entry.tip]) byTip[entry.tip] = { tip: entry.tip, count: 0, breakdown: {}, denumiri: [] };
+    byTip[entry.tip].count += 1;
+    byTip[entry.tip].breakdown[entry.location] = (byTip[entry.tip].breakdown[entry.location] || 0) + 1;
+    byTip[entry.tip].denumiri = byTip[entry.tip].denumiri.concat(locTubeAnalize[keys[k]]);
+  }
+
+  // Convert to array and sort
+  var result = Object.values(byTip);
+  result.sort(function(a, b) { return b.count - a.count || a.tip.localeCompare(b.tip); });
+  return result;
+}
+
 // Build analize index: normalized name → { displayName, offers: [records] }
 var ANALIZE_INDEX = (function() {
   var idx = {};
@@ -185,17 +229,20 @@ function doCartSearch() {
   }
   cartEmptyHintEl.style.display = "none";
 
+  // Iterate over the FLAT list of offers — show each (Denumire, Laborator) as separate result
   var starts = [], contains = [];
-  for (var i = 0; i < ANALIZE_LIST.length; i++) {
-    var e = ANALIZE_LIST[i];
-    var nm = e.displayName.toLowerCase();
-    if (nm.indexOf(q) === 0) starts.push(e);
-    else if (nm.indexOf(q) !== -1) contains.push(e);
+  for (var i = 0; i < DATA.length; i++) {
+    var r = DATA[i];
+    var nm = r.Denumire.toLowerCase();
+    if (nm.indexOf(q) === 0) starts.push(r);
+    else if (nm.indexOf(q) !== -1) contains.push(r);
   }
-  function byCheapest(a, b) { return cheapestOffer(a).finalPrice - cheapestOffer(b).finalPrice; }
+  function byCheapest(a, b) {
+    return finalPrice(a.Pret, a.Laborator) - finalPrice(b.Pret, b.Laborator);
+  }
   starts.sort(byCheapest);
   contains.sort(byCheapest);
-  var results = starts.concat(contains).slice(0, 40);
+  var results = starts.concat(contains).slice(0, 60);
 
   if (results.length === 0) {
     cartSuggestionsEl.innerHTML = '<div style="padding:24px;text-align:center;color:rgba(15,17,23,0.4);font-size:13px">Nicio analiza potrivita.</div>';
@@ -205,19 +252,21 @@ function doCartSearch() {
 
   var html = "";
   for (var i = 0; i < results.length; i++) {
-    var e = results[i];
-    var inCart = cartState.cart.some(function(c){ return c.key === e.key; });
-    var ch = cheapestOffer(e);
-    var lab = ch.offer.Laborator;
-    var disc = discPct(lab);
-    var hasDetails = !!getDetails(lab, e.displayName);
-    html += '<div class="suggestion" data-key="' + esc(e.key) + '"' + (inCart ? ' style="opacity:0.5;pointer-events:none"' : '') + '>';
+    var r = results[i];
+    var k = normName(r.Denumire);
+    // "in cart" = exact same (key + lab) is already added
+    var inCart = cartState.cart.some(function(c){ return c.key === k && c.lab === r.Laborator; });
+    var fp = finalPrice(r.Pret, r.Laborator);
+    var disc = discPct(r.Laborator);
+    var hasDetails = !!getDetails(r.Laborator, r.Denumire);
+    // Encode offer identifier in data attrs
+    html += '<div class="suggestion" data-key="' + esc(k) + '" data-lab="' + esc(r.Laborator) + '"' + (inCart ? ' style="opacity:0.5;pointer-events:none"' : '') + '>';
     html += '<div class="suggestion-info">';
-    html += '<div class="suggestion-name">' + esc(e.displayName) + (inCart ? ' <em style="font-style:normal;color:#4ade80;font-size:11px;font-weight:600">(in cerere)</em>' : '') + '</div>';
+    html += '<div class="suggestion-name">' + esc(r.Denumire) + (inCart ? ' <em style="font-style:normal;color:#4ade80;font-size:11px;font-weight:600">(in cerere)</em>' : '') + '</div>';
     html += '<div class="suggestion-meta">';
-    html += '<span class="suggestion-lab lab-bg-' + labCls(lab) + '">' + esc(lab) + '</span>';
-    if (e.offers.length > 1) {
-      html += '<span class="suggestion-labs-count">' + e.offers.length + ' laboratoare</span>';
+    html += '<span class="suggestion-lab lab-bg-' + labCls(r.Laborator) + '">' + esc(r.Laborator) + '</span>';
+    if (r.Timp && r.Timp !== "N/A") {
+      html += '<span class="suggestion-timp">' + esc(r.Timp) + '</span>';
     }
     if (hasDetails) {
       html += '<span class="suggestion-has-details" title="Are instructiuni de recoltare">&#9432; detalii</span>';
@@ -225,7 +274,7 @@ function doCartSearch() {
     html += '</div></div>';
     html += '<div style="display:flex;align-items:center;gap:14px">';
     html += '<div class="suggestion-add-hint">+ Adauga</div>';
-    html += '<div class="suggestion-price">' + ch.finalPrice + '<small>' + (disc > 0 ? "cu " + disc + "% disc" : "RON") + '</small></div>';
+    html += '<div class="suggestion-price">' + fp + '<small>' + (disc > 0 ? "cu " + disc + "% disc" : "RON") + '</small></div>';
     html += '</div></div>';
   }
   cartSuggestionsEl.innerHTML = html;
@@ -235,7 +284,7 @@ function doCartSearch() {
   for (var j = 0; j < items.length; j++) {
     (function(el) {
       el.addEventListener("click", function() {
-        addToCart(el.getAttribute("data-key"));
+        addToCart(el.getAttribute("data-key"), el.getAttribute("data-lab"));
       });
     })(items[j]);
   }
@@ -245,17 +294,25 @@ cartSearchInput.addEventListener("focus", function() {
   if (cartSearchInput.value.trim().length >= 2) doCartSearch();
 });
 
-function addToCart(key) {
+function addToCart(key, lab) {
   if (!ANALIZE_INDEX[key]) return;
-  if (cartState.cart.some(function(c){ return c.key === key; })) return;
-  cartState.cart.push({ key: key, displayName: ANALIZE_INDEX[key].displayName });
+  // Need to find the specific offer for the chosen lab
+  var entry = ANALIZE_INDEX[key];
+  var offer = null;
+  for (var i = 0; i < entry.offers.length; i++) {
+    if (entry.offers[i].Laborator === lab) { offer = entry.offers[i]; break; }
+  }
+  if (!offer) return;
+  // De-dup: same (key + lab) already in cart
+  if (cartState.cart.some(function(c){ return c.key === key && c.lab === lab; })) return;
+  cartState.cart.push({ key: key, lab: lab, displayName: entry.displayName, offer: offer });
   renderCart();
   doCartSearch();
   cartSearchInput.select();
 }
 
-function removeFromCart(key) {
-  cartState.cart = cartState.cart.filter(function(c){ return c.key !== key; });
+function removeFromCart(key, lab) {
+  cartState.cart = cartState.cart.filter(function(c){ return !(c.key === key && c.lab === lab); });
   renderCart();
   doCartSearch();
 }
@@ -263,12 +320,14 @@ function removeFromCart(key) {
 function renderCart() {
   cartCountEl.textContent = cartState.cart.length;
   btnProcess.disabled = cartState.cart.length === 0;
+  var eprubeteSummaryEl = document.getElementById("eprubeteSummary");
 
   if (cartState.cart.length === 0) {
     cartEmptyEl.style.display = "block";
     cartListEl.innerHTML = '';
     cartListEl.appendChild(cartEmptyEl);
     cartTotalEl.textContent = "— RON";
+    if (eprubeteSummaryEl) eprubeteSummaryEl.style.display = "none";
     return;
   }
   cartEmptyEl.style.display = "none";
@@ -276,21 +335,21 @@ function renderCart() {
   var total = 0;
   var html = "";
   for (var i = 0; i < cartState.cart.length; i++) {
-    var entry = ANALIZE_INDEX[cartState.cart[i].key];
-    if (!entry) continue;
-    var ch = cheapestOffer(entry);
-    var fp = ch.finalPrice;
-    var lab = ch.offer.Laborator;
+    var c = cartState.cart[i];
+    var offer = c.offer;
+    if (!offer) continue;
+    var fp = finalPrice(offer.Pret, offer.Laborator);
+    var lab = offer.Laborator;
     var disc = discPct(lab);
     total += fp;
-    var d = getDetails(lab, entry.displayName);
+    var d = getDetails(lab, c.displayName);
     html += '<div class="cart-item">';
     html += '<div class="cart-item-info">';
-    html += '<div class="cart-item-name">' + esc(entry.displayName) + '</div>';
+    html += '<div class="cart-item-name">' + esc(c.displayName) + '</div>';
     html += '<div class="cart-item-meta">';
     html += '<span class="cart-item-lab lab-bg-' + labCls(lab) + '">' + esc(lab) + '</span>';
-    if (ch.offer.Timp && ch.offer.Timp !== "N/A") {
-      html += '<span>' + esc(ch.offer.Timp) + '</span>';
+    if (offer.Timp && offer.Timp !== "N/A") {
+      html += '<span>' + esc(offer.Timp) + '</span>';
     }
     html += '</div>';
     if (d) {
@@ -306,18 +365,56 @@ function renderCart() {
     html += '<div class="cart-item-right">';
     html += '<div class="cart-item-price">' + fp + ' RON</div>';
     if (disc > 0) {
-      html += '<div class="cart-item-price-orig">' + ch.offer.Pret.toFixed(0) + ' RON</div>';
+      html += '<div class="cart-item-price-orig">' + offer.Pret.toFixed(0) + ' RON</div>';
     }
-    html += '<button class="cart-item-remove" data-key="' + esc(cartState.cart[i].key) + '" title="Sterge">&times;</button>';
+    html += '<button class="cart-item-remove" data-key="' + esc(c.key) + '" data-lab="' + esc(lab) + '" title="Sterge">&times;</button>';
     html += '</div></div>';
   }
   cartListEl.innerHTML = html;
   cartTotalEl.textContent = fmtRon(total);
 
+  // ─── Live eprubete summary ───
+  var summaryItems = [];
+  for (var i = 0; i < cartState.cart.length; i++) {
+    if (cartState.cart[i].offer) summaryItems.push({ offer: cartState.cart[i].offer });
+  }
+  var eprubeteSummary = buildEprubetSummary(summaryItems);
+  if (eprubeteSummary.length === 0) {
+    eprubeteSummaryEl.style.display = "none";
+  } else {
+    var labCount = {};
+    for (var s = 0; s < eprubeteSummary.length; s++) {
+      var br = eprubeteSummary[s].breakdown;
+      for (var lb in br) labCount[lb] = (labCount[lb] || 0) + br[lb];
+    }
+    var labs = Object.keys(labCount);
+    var sumHtml = "";
+    for (var s = 0; s < eprubeteSummary.length; s++) {
+      var item = eprubeteSummary[s];
+      var brKeys = Object.keys(item.breakdown);
+      sumHtml += '<li class="eprubete-item">';
+      sumHtml += '<span class="eprubete-count">' + item.count + '×</span>';
+      sumHtml += '<span class="eprubete-text">' + esc(item.tip);
+      // Show locations on separate lines for clarity
+      if (brKeys.length > 0) {
+        var locLines = brKeys.map(function(loc){
+          var cnt = item.breakdown[loc];
+          return (cnt > 1 ? cnt + "× " : "") + "→ " + loc;
+        });
+        sumHtml += '<small>' + esc(locLines.join(" • ")) + '</small>';
+      }
+      sumHtml += '</span></li>';
+    }
+    document.getElementById("eprubeteList").innerHTML = sumHtml;
+    eprubeteSummaryEl.style.display = "block";
+  }
+
   var removes = cartListEl.querySelectorAll(".cart-item-remove");
   for (var j = 0; j < removes.length; j++) {
     (function(btn) {
-      btn.addEventListener("click", function() { removeFromCart(btn.getAttribute("data-key")); });
+      btn.addEventListener("click", function() {
+        removeFromCart(btn.getAttribute("data-key"), btn.getAttribute("data-lab"));
+      });
     })(removes[j]);
   }
 }
@@ -380,17 +477,17 @@ document.addEventListener("keydown", function(e) {
 function buildReport() {
   var items = [], grandTotal = 0, grandListTotal = 0;
   for (var i = 0; i < cartState.cart.length; i++) {
-    var entry = ANALIZE_INDEX[cartState.cart[i].key];
-    if (!entry) continue;
-    var ch = cheapestOffer(entry);
-    grandTotal += ch.finalPrice;
-    grandListTotal += ch.offer.Pret;
+    var c = cartState.cart[i];
+    if (!c.offer) continue;
+    var fp = finalPrice(c.offer.Pret, c.offer.Laborator);
+    grandTotal += fp;
+    grandListTotal += c.offer.Pret;
     items.push({
-      key: cartState.cart[i].key,
-      displayName: entry.displayName,
-      offer: ch.offer,
-      finalPrice: ch.finalPrice,
-      discount: discPct(ch.offer.Laborator)
+      key: c.key,
+      displayName: c.displayName,
+      offer: c.offer,
+      finalPrice: fp,
+      discount: discPct(c.offer.Laborator)
     });
   }
   var groups = {};
@@ -419,6 +516,31 @@ function openReport() {
     '<span class="label">Pacient CNP</span><strong>' + esc(cartState.cnp) + '</strong>';
 
   var body = '';
+
+  // ─── Eprubete summary section ───
+  var reportEprubete = buildEprubetSummary(r.items);
+  if (reportEprubete.length > 0) {
+    body += '<div class="eprubete-summary-report">';
+    body += '<div class="eprubete-label">&#9887; Eprubete necesare pentru recoltare</div>';
+    body += '<ul class="eprubete-list">';
+    for (var s = 0; s < reportEprubete.length; s++) {
+      var item = reportEprubete[s];
+      var brKeys = Object.keys(item.breakdown);
+      body += '<li class="eprubete-item">';
+      body += '<span class="eprubete-count">' + item.count + '×</span>';
+      body += '<span class="eprubete-text">' + esc(item.tip);
+      if (brKeys.length > 0) {
+        var locLines = brKeys.map(function(loc){
+          var cnt = item.breakdown[loc];
+          return (cnt > 1 ? cnt + "× " : "") + "→ " + loc;
+        });
+        body += '<small>' + esc(locLines.join(" • ")) + '</small>';
+      }
+      body += '</span></li>';
+    }
+    body += '</ul></div>';
+  }
+
   body += '<div class="report-section-title">Unde mergi si ce platesti</div>';
   body += '<p class="report-section-sub">Fiecare analiza e optimizata pentru pret minim. Mai jos vezi grupat pe laboratoare.</p>';
 
@@ -526,6 +648,39 @@ function exportReportXlsx(r) {
   ws["!cols"] = [{wch:15},{wch:22},{wch:45},{wch:34},{wch:18},{wch:14},{wch:28},{wch:40},{wch:18},{wch:14},{wch:10},{wch:14},{wch:12}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Cerere analize");
+
+  // ─── Sheet 2: Eprubete summary ───
+  var eprubeteForExcel = buildEprubetSummary(r.items);
+  if (eprubeteForExcel.length > 0) {
+    var eRows = [];
+    eRows.push({ "Tip eprubeta": "REZUMAT EPRUBETE NECESARE" });
+    eRows.push({ "Tip eprubeta": "CNP pacient:", "Total bucati": cartState.cnp });
+    eRows.push({});
+    var totalTubes = 0;
+    for (var s = 0; s < eprubeteForExcel.length; s++) {
+      var item = eprubeteForExcel[s];
+      totalTubes += item.count;
+      var brKeys = Object.keys(item.breakdown);
+      var brParts = brKeys.map(function(k){
+        var c = item.breakdown[k];
+        return (c > 1 ? c + "× " : "") + k;
+      });
+      eRows.push({
+        "Tip eprubeta": item.tip,
+        "Total bucati": item.count,
+        "Locatii (laboratoare destinatare)": brParts.join(" | ")
+      });
+    }
+    eRows.push({});
+    eRows.push({
+      "Tip eprubeta": "TOTAL EPRUBETE",
+      "Total bucati": totalTubes
+    });
+    var ws2 = XLSX.utils.json_to_sheet(eRows);
+    ws2["!cols"] = [{wch:35},{wch:15},{wch:60}];
+    XLSX.utils.book_append_sheet(wb, ws2, "Eprubete");
+  }
+
   var date = new Date();
   var fn = "cerere_analize_" + cartState.cnp + "_" + date.getFullYear() + "-" + String(date.getMonth()+1).padStart(2,"0") + "-" + String(date.getDate()).padStart(2,"0") + ".xlsx";
   XLSX.writeFile(wb, fn);
@@ -533,6 +688,14 @@ function exportReportXlsx(r) {
 
 function exportReportJson(r) {
   var now = new Date();
+  var eprubeteForJson = buildEprubetSummary(r.items).map(function(item) {
+    return {
+      tip: item.tip,
+      bucati: item.count,
+      pentruLocatii: item.breakdown
+    };
+  });
+  var totalEprubete = eprubeteForJson.reduce(function(sum, e){ return sum + e.bucati; }, 0);
   var out = {
     generatedAt: now.toISOString(),
     cnpPacient: cartState.cnp,
@@ -541,8 +704,10 @@ function exportReportJson(r) {
       totalLaboratoare: r.groups.length,
       totalListRON: r.grandListTotal,
       totalFinalRON: r.grandTotal,
-      economieRON: r.grandListTotal - r.grandTotal
+      economieRON: r.grandListTotal - r.grandTotal,
+      totalEprubete: totalEprubete
     },
+    eprubete: eprubeteForJson,
     discountsApplied: Object.assign({}, discounts),
     groups: r.groups.map(function(g) {
       return {
