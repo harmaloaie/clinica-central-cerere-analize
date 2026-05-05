@@ -756,6 +756,71 @@ body {
   padding-top: 20px;
   border-top: 1px solid rgba(255,255,255,0.1);
 }
+.eprubete-summary {
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  background: rgba(184,151,58,0.08);
+  border: 1px solid rgba(184,151,58,0.25);
+  border-radius: var(--radius);
+}
+.eprubete-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 10px;
+}
+.eprubete-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.eprubete-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--paper);
+}
+.eprubete-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 8px;
+  background: var(--gold);
+  color: var(--ink);
+  border-radius: 100px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.eprubete-text { flex: 1; line-height: 1.35; }
+.eprubete-text small {
+  display: block;
+  font-size: 11px;
+  color: rgba(248,246,241,0.45);
+  margin-top: 1px;
+}
+
+/* Variant for the report modal (light bg) */
+.eprubete-summary-report {
+  margin: 16px 0 24px;
+  padding: 18px 22px;
+  background: var(--cream);
+  border-left: 3px solid var(--gold);
+  border-radius: var(--radius);
+}
+.eprubete-summary-report .eprubete-label { color: rgba(15,17,23,0.6); margin-bottom: 12px; }
+.eprubete-summary-report .eprubete-item { color: var(--ink); font-size: 14px; }
+.eprubete-summary-report .eprubete-text small { color: rgba(15,17,23,0.5); }
+
 .cart-totals {
   display: flex;
   justify-content: space-between;
