@@ -2343,24 +2343,124 @@ var SANTE_TEMPLATE_LABS = ["Clinica Sante", "Binisan", "Solomed", "Medilab"];
 
 // Classify an analiza into a borderou column key
 // Returns one of: HLG, COAG, VSH, BCH, URINA, FECALE, TEXUDA, ALTELE
-function classifyAnaliza(denumire, categorie) {
+// Uses BOTH name-based rules AND vacutainer info (recipient + culoare + material)
+// for much higher precision (was ~70% ALTELE, now ~25% ALTELE).
+// Optional lab parameter lets us look up vacutainer info from getDetails().
+function classifyAnaliza(denumire, categorie, lab) {
   var d = (denumire || "").toLowerCase();
   var c = (categorie || "");
-  // Name-based rules (most specific first)
-  if (d.indexOf("hemoleucograma") !== -1 || d.indexOf("hemograma") !== -1 || d.indexOf("hlg") === 0) return "HLG";
-  if (d.indexOf("vsh") !== -1 || d.indexOf("sedimentare") !== -1) return "VSH";
-  if (d.indexOf("urocultur") !== -1 || d.indexOf("sumar urina") !== -1 || d.indexOf("sumar de urina") !== -1 || d.indexOf("examen urina") !== -1) return "URINA";
-  if (d.indexOf("coagular") !== -1 || d.indexOf("aptt") !== -1 || d.indexOf("inr") !== -1 || d.indexOf("fibrinogen") !== -1 || d.indexOf("d-dimer") !== -1 || d.indexOf("d -dimer") !== -1) return "COAG";
-  if (d.indexOf("exsudat") !== -1 || d.indexOf("exudat") !== -1) return "TEXUDA";
-  if (d.indexOf("coproparazit") !== -1 || d.indexOf("coprocultur") !== -1 || d.indexOf("materii fecale") !== -1 || d.indexOf("fecale") !== -1) return "FECALE";
-  if (d.indexOf("biochimi") !== -1) return "BCH";
-  // Category-based fallback
-  if (c === "URINA") return "URINA";
-  if (c === "MATERII FECALE" || c === "Coprologie și screening digestiv") return "FECALE";
+  // Look up vacutainer info from details_*.json if lab is provided
+  var recipient = "", culoare = "", material = "";
+  if (lab) {
+    var det = getDetails(lab, denumire);
+    if (det) {
+      recipient = (det.Recipient || "").toLowerCase();
+      culoare = (det.CuloareDop || "").toLowerCase();
+      material = (det.MaterialBiologic || "").toLowerCase();
+      // Strip diacritics from culoare for matching (e.g. "Roșu" -> "rosu")
+      culoare = culoare.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      recipient = recipient.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    }
+  }
+  var rc = recipient + " " + culoare; // combined for color/recipient checks
+
+  // ─── LAME / Citologie ───
+  if (d.indexOf("babes-papanicolau") !== -1 || d.indexOf("babes papanicolau") !== -1 ||
+      d.indexOf("papanicolau") !== -1 || d.indexOf("thinprep") !== -1 ||
+      d.indexOf("pap test") !== -1 || d.indexOf("pap-test") !== -1 ||
+      d.indexOf("citologic") !== -1 || d.indexOf("citologie") !== -1) return "LAME";
+  if (recipient.indexOf("lama") !== -1 || recipient.indexOf("lame") !== -1) return "LAME";
+
+  // ─── EXUDAT / secretii (key TEXUDA for PDF compatibility) ───
+  if (d.indexOf("exsudat") !== -1 || d.indexOf("exudat") !== -1 ||
+      d.indexOf("tampon ") !== -1 || d.indexOf("tampon nazal") !== -1 ||
+      d.indexOf("tampon vagin") !== -1 || d.indexOf("tampon uretral") !== -1 ||
+      d.indexOf("tampon faringian") !== -1 ||
+      d.indexOf("secretie nazal") !== -1 || d.indexOf("secretie vagin") !== -1 ||
+      d.indexOf("secretie uretral") !== -1 || d.indexOf("secretie conjunctiv") !== -1 ||
+      d.indexOf("secretie otic") !== -1 || d.indexOf("secretie auric") !== -1 ||
+      d.indexOf("cultura faringian") !== -1 || d.indexOf("cultura nazal") !== -1) return "TEXUDA";
+  if (recipient.indexOf("eswab") !== -1 || recipient.indexOf("tampon") !== -1 ||
+      recipient.indexOf("swab") !== -1) return "TEXUDA";
   if (c === "EXSUDATE" || c === "SECRETII") return "TEXUDA";
+
+  // ─── FECALE / coprocultura ───
+  if (d.indexOf("coproparazit") !== -1 || d.indexOf("coprocultur") !== -1 ||
+      d.indexOf("materii fecale") !== -1 || d.indexOf("fecale") !== -1 ||
+      d.indexOf("scaun") !== -1 || d.indexOf("calprotectin") !== -1 ||
+      d.indexOf("h. pylori antigen") !== -1 || d.indexOf("helicobacter pylori antigen") !== -1 ||
+      d.indexOf("antigen helicobacter") !== -1 || d.indexOf("rotavirus") !== -1 ||
+      d.indexOf("adenovirus fecal") !== -1 || d.indexOf("sange ocult") !== -1 ||
+      d.indexOf("hemoragii oculte") !== -1 || d.indexOf("lactoferin") !== -1 ||
+      d.indexOf("hemoglobina umana din secretii") !== -1 ||
+      d.indexOf("coprologie") !== -1 || d.indexOf("amprenta anala") !== -1) return "FECALE";
+  if (material.indexOf("materii fecale") !== -1 || material.indexOf("scaun") !== -1 ||
+      material.indexOf("fecale") !== -1 || material.indexOf("coprocitograma") !== -1) return "FECALE";
+  if (recipient.indexOf("coprorecolt") !== -1) return "FECALE";
+  if (c === "MATERII FECALE" || c === "Coprologie și screening digestiv") return "FECALE";
+
+  // ─── URINA ───
+  if (d.indexOf("urocultur") !== -1 || d.indexOf("sumar urina") !== -1 ||
+      d.indexOf("sumar de urina") !== -1 || d.indexOf("sumar urinar") !== -1 ||
+      d.indexOf("examen urina") !== -1 || d.indexOf("urina spontana") !== -1 ||
+      d.indexOf("urina/24 ore") !== -1 || d.indexOf(" urinar") !== -1 ||
+      d.indexOf("microalbumin") !== -1 || d.indexOf("proteinurie") !== -1 ||
+      d.indexOf("albumin urin") !== -1 || d.indexOf("sediment urinar") !== -1 ||
+      d.indexOf("calciu urinar") !== -1 || d.indexOf("cortizol urinar") !== -1 ||
+      d.indexOf("creatinina urinar") !== -1 || d.indexOf("magneziu urinar") !== -1 ||
+      d.indexOf("potasiu urinar") !== -1 || d.indexOf("sodiu urinar") !== -1 ||
+      d.indexOf("uree urinar") !== -1 || d.indexOf("acid uric urinar") !== -1 ||
+      d.indexOf("glucoza urinar") !== -1 || d.indexOf("fosfat urinar") !== -1 ||
+      d.indexOf("clor urinar") !== -1 || d.indexOf("in urina") !== -1) return "URINA";
+  if (material.indexOf("urin") !== -1 || recipient.indexOf("urin") !== -1) return "URINA";
+  if (c === "URINA") return "URINA";
+
+  // ─── COAG ───
+  if (d.indexOf("coagular") !== -1 || d.indexOf("aptt") !== -1 || d.indexOf("ttpa") !== -1 ||
+      d.indexOf("fibrinogen") !== -1 || d.indexOf("d-dimer") !== -1 ||
+      d.indexOf("d dimer") !== -1 || d.indexOf("ddimer") !== -1 ||
+      d.indexOf("antitrombina") !== -1 || d.indexOf("antitrombin") !== -1 ||
+      d.indexOf("proteina c") !== -1 || d.indexOf("proteina s") !== -1 ||
+      d.indexOf("timp quick") !== -1 || d.indexOf("timp de protrombina") !== -1 ||
+      d.indexOf("protrombin") !== -1 || d.indexOf("pt inr") !== -1 ||
+      d.indexOf("pt, inr") !== -1 || d.indexOf("factor v ") !== -1 ||
+      d.indexOf("factor viii") !== -1 || d.indexOf("factor ix") !== -1 ||
+      d.indexOf("factor x ") !== -1 || d.indexOf("factor xi") !== -1 ||
+      d.indexOf("lupus anticoagulant") !== -1 || d.indexOf("timp de trombina") !== -1) return "COAG";
+  var dt = d.trim();
+  if (dt === "pt" || dt === "inr" || dt === "pt inr" || dt === "pt, inr" || dt === "pt/inr") return "COAG";
+  if (rc.indexOf("albastru") !== -1 || rc.indexOf("citrat") !== -1 ||
+      material.indexOf("citrat") !== -1) return "COAG";
   if (c === "Coagulare și hemostază") return "COAG";
-  if (c === "Biochimie") return "BCH";
+
+  // ─── VSH ───
+  if (d.indexOf("vsh") !== -1 || d.indexOf("sedimentare") !== -1 ||
+      d.indexOf("viteza de sedimentare") !== -1) return "VSH";
+  if (recipient.indexOf("vsh") !== -1) return "VSH";
+
+  // ─── HLG ───
+  if (d.indexOf("hemoleucograma") !== -1 || d.indexOf("hemograma") !== -1 ||
+      d.indexOf("reticulocit") !== -1 || d.indexOf("frotiu sanguin") !== -1 ||
+      d.indexOf("grup sanguin") !== -1 || d.indexOf("grupul sanguin") !== -1 ||
+      d.indexOf("factor rh") !== -1 || d.indexOf("rezistenta osmotica") !== -1 ||
+      d.indexOf("aglutinine la rece") !== -1 || d.indexOf("hlg") === 0) return "HLG";
+  if (/\b(rh|abo)\b/.test(d)) return "HLG";
+  // EDTA / dop mov = hematology (when not COAG)
+  if (rc.indexOf("edta") !== -1 || rc.indexOf("mov") !== -1) return "HLG";
+  if (material.indexOf("sange total") !== -1 || material.indexOf("sange edta") !== -1 ||
+      material.indexOf("sange integral") !== -1) return "HLG";
   if (c === "Hematologie") return "HLG";
+
+  // ─── BCH (Biochimie) — uses recipient signals ───
+  if (d.indexOf("biochimi") !== -1) return "BCH";
+  if (rc.indexOf("galben") !== -1 || rc.indexOf("biochimie") !== -1 ||
+      rc.indexOf("serologie") !== -1 || rc.indexOf("sst") !== -1 ||
+      rc.indexOf("gel separator") !== -1 || rc.indexOf("rosu") !== -1) return "BCH";
+  if (material.indexOf("ser") === 0 || material.indexOf(" ser ") !== -1 ||
+      material === "ser" || material.indexOf("plasma") !== -1 ||
+      material.indexOf("sange venos") !== -1) return "BCH";
+  if (c === "Biochimie") return "BCH";
+
   return "ALTELE";
 }
 
@@ -2479,10 +2579,10 @@ function buildBorderouRows() {
     var labItems = items.filter(function(it) { return it.laborator === lab; });
     if (labItems.length === 0) continue;
     // Build column flags
-    var cols = { HLG:false, COAG:false, VSH:false, BCH:false, URINA:false, FECALE:false, TEXUDA:false, ALTELE:false };
+    var cols = { HLG:false, COAG:false, VSH:false, BCH:false, URINA:false, FECALE:false, TEXUDA:false, LAME:false, ALTELE:false };
     var altele_names = [];
     for (var j = 0; j < labItems.length; j++) {
-      var col = classifyAnaliza(labItems[j].denumire, labItems[j].categorie);
+      var col = classifyAnaliza(labItems[j].denumire, labItems[j].categorie, labItems[j].laborator);
       cols[col] = true;
       if (col === "ALTELE") altele_names.push(labItems[j].denumire);
     }
@@ -2526,14 +2626,14 @@ function renderBorderouPreview() {
   html += '<th style="padding:8px;">CNP</th>';
   html += '<th style="padding:8px;">HLG</th><th style="padding:8px;">COAG</th><th style="padding:8px;">VSH</th>';
   html += '<th style="padding:8px;">BCH</th><th style="padding:8px;">URINA</th><th style="padding:8px;">FECALE</th>';
-  html += '<th style="padding:8px;">EXSUDAT</th><th style="padding:8px;">ALTELE</th>';
+  html += '<th style="padding:8px;">EXSUDAT</th><th style="padding:8px;">LAME</th><th style="padding:8px;">ALTELE</th>';
   html += '</tr></thead><tbody>';
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
     html += '<tr style="border-bottom:1px solid rgba(15,17,23,0.08);">';
     html += '<td style="padding:8px;">' + esc((r.prenume + " " + r.nume).trim() || "—") + '</td>';
     html += '<td style="padding:8px;font-family:monospace;">' + esc(r.cnp) + '</td>';
-    var colKeys = ["HLG","COAG","VSH","BCH","URINA","FECALE","TEXUDA","ALTELE"];
+    var colKeys = ["HLG","COAG","VSH","BCH","URINA","FECALE","TEXUDA","LAME","ALTELE"];
     for (var k = 0; k < colKeys.length; k++) {
       html += '<td style="padding:8px;text-align:center;' + (r.cols[colKeys[k]] ? "color:var(--gold);font-weight:700;" : "color:rgba(15,17,23,0.2);") + '">' + (r.cols[colKeys[k]] ? "✓" : "") + '</td>';
     }
@@ -2691,7 +2791,7 @@ function generatePDFSante(rows, labName) {
       r.cols.TEXUDA ? "X" : "",
       r.cols.FECALE ? "X" : "",
       r.cols.URINA ? "X" : "",
-      "",  // Lame - manual
+      r.cols.LAME ? "X" : "",
       r.cols.ALTELE ? "X" : "",
       "", "", "", "", "", "", "", "", ""  // Manual semnaturi/timpi
     ];
@@ -2800,7 +2900,7 @@ function generatePDFPoliana(rows) {
       r.cols.URINA ? "X" : "",
       r.cols.TEXUDA ? "X" : "",
       r.cols.FECALE ? "X" : "",
-      "",  // Lame
+      r.cols.LAME ? "X" : "",
       "",
       r.cols.ALTELE ? "X" : "",
       ""   // Semnatura - manual
