@@ -158,6 +158,8 @@ function switchView(name) {
   document.getElementById("viewCart").style.display = (name === "cart") ? "block" : "none";
   document.getElementById("viewBrowse").style.display = (name === "browse") ? "block" : "none";
   document.getElementById("viewIstoric").style.display = (name === "istoric") ? "block" : "none";
+  var bordEl = document.getElementById("viewBorderouri");
+  if (bordEl) bordEl.style.display = (name === "borderouri") ? "block" : "none";
   var tabs = document.querySelectorAll(".topbar-tab");
   for (var i = 0; i < tabs.length; i++) {
     var t = tabs[i];
@@ -167,7 +169,6 @@ function switchView(name) {
   }
   if (name === "cart") {
     if (!cartState.pacientValid) {
-      // Focus first empty required field
       if (!cartState.prenumeValid) prenumeInput.focus();
       else if (!cartState.numeValid) numeInput.focus();
       else cnpInput.focus();
@@ -177,8 +178,9 @@ function switchView(name) {
   } else if (name === "browse") {
     document.getElementById("q").focus();
   } else if (name === "istoric") {
-    // Auto-load on first switch to istoric (and refresh data each time)
     if (typeof loadIstoric === "function") loadIstoric();
+  } else if (name === "borderouri") {
+    if (typeof loadBorderouri === "function") loadBorderouri();
   }
 }
 var tabs = document.querySelectorAll(".topbar-tab");
@@ -2320,3 +2322,547 @@ document.getElementById("btnIstoricClearFilters").addEventListener("click", func
   document.getElementById("istoricFilterTo").value = "";
   if (istoricState.loaded) renderIstoric();
 });
+
+// ════════════════════════════════════════════════════════════════
+// VIEW 4: BORDEROURI (generare PDF pe laborator/data)
+// ════════════════════════════════════════════════════════════════
+var borderouState = {
+  loaded: false,
+  cereri: [],
+  selectedDate: "",
+  dateField: "created_at",
+  selectedLab: ""
+};
+
+// Labs with PDF templates currently implemented
+var BORDEROU_TEMPLATES = ["Derzelius", "Clinica Sante", "Poliana"];
+
+// Classify an analiza into a borderou column key
+// Returns one of: HLG, COAG, VSH, BCH, URINA, FECALE, TEXUDA, ALTELE
+function classifyAnaliza(denumire, categorie) {
+  var d = (denumire || "").toLowerCase();
+  var c = (categorie || "");
+  // Name-based rules (most specific first)
+  if (d.indexOf("hemoleucograma") !== -1 || d.indexOf("hemograma") !== -1 || d.indexOf("hlg") === 0) return "HLG";
+  if (d.indexOf("vsh") !== -1 || d.indexOf("sedimentare") !== -1) return "VSH";
+  if (d.indexOf("urocultur") !== -1 || d.indexOf("sumar urina") !== -1 || d.indexOf("sumar de urina") !== -1 || d.indexOf("examen urina") !== -1) return "URINA";
+  if (d.indexOf("coagular") !== -1 || d.indexOf("aptt") !== -1 || d.indexOf("inr") !== -1 || d.indexOf("fibrinogen") !== -1 || d.indexOf("d-dimer") !== -1 || d.indexOf("d -dimer") !== -1) return "COAG";
+  if (d.indexOf("exsudat") !== -1 || d.indexOf("exudat") !== -1) return "TEXUDA";
+  if (d.indexOf("coproparazit") !== -1 || d.indexOf("coprocultur") !== -1 || d.indexOf("materii fecale") !== -1 || d.indexOf("fecale") !== -1) return "FECALE";
+  if (d.indexOf("biochimi") !== -1) return "BCH";
+  // Category-based fallback
+  if (c === "URINA") return "URINA";
+  if (c === "MATERII FECALE" || c === "Coprologie și screening digestiv") return "FECALE";
+  if (c === "EXSUDATE" || c === "SECRETII") return "TEXUDA";
+  if (c === "Coagulare și hemostază") return "COAG";
+  if (c === "Biochimie") return "BCH";
+  if (c === "Hematologie") return "HLG";
+  return "ALTELE";
+}
+
+// Load all cereri (reuses istoric data if already loaded)
+async function loadBorderouri() {
+  var listEl = document.getElementById("borderouPreview");
+  // If istoric already loaded, just use its data
+  if (istoricState.loaded && istoricState.cereri.length > 0) {
+    borderouState.cereri = istoricState.cereri;
+    borderouState.loaded = true;
+    initBorderouDate();
+    return;
+  }
+  // Else load same way as istoric
+  listEl.innerHTML = '<div class="istoric-loading">Se incarca cererile...</div>';
+  try {
+    var res = await sb.from("cc_cereri")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    if (res.error) {
+      listEl.innerHTML = '<div class="istoric-empty">Eroare la incarcarea cererilor: ' + esc(res.error.message) + '</div>';
+      return;
+    }
+    borderouState.cereri = res.data || [];
+    borderouState.loaded = true;
+    initBorderouDate();
+  } catch (e) {
+    listEl.innerHTML = '<div class="istoric-empty">Eroare: ' + esc(e.message || e) + '</div>';
+  }
+}
+
+// Init date input to today if empty, then populate lab dropdown
+function initBorderouDate() {
+  var dateInput = document.getElementById("borderouFilterDate");
+  if (!dateInput.value) {
+    var today = new Date();
+    var iso = today.getFullYear() + "-" + String(today.getMonth()+1).padStart(2,"0") + "-" + String(today.getDate()).padStart(2,"0");
+    dateInput.value = iso;
+  }
+  borderouState.selectedDate = dateInput.value;
+  borderouState.dateField = document.getElementById("borderouFilterDateField").value;
+  updateBorderouLabsDropdown();
+}
+
+// Get cereri matching the selected date
+function getCereriForSelectedDate() {
+  var d = borderouState.selectedDate;
+  if (!d) return [];
+  var fromTs = new Date(d + "T00:00:00").getTime();
+  var toTs = new Date(d + "T23:59:59.999").getTime();
+  var field = borderouState.dateField;
+  return borderouState.cereri.filter(function(c) {
+    var v = c[field];
+    if (!v) return false;
+    var t;
+    if (typeof v === "string") {
+      // Could be ISO or YYYY-MM-DD
+      t = new Date(v.length === 10 ? v + "T12:00:00" : v).getTime();
+    } else {
+      t = new Date(v).getTime();
+    }
+    return t >= fromTs && t <= toTs;
+  });
+}
+
+// Get unique labs that have items in the cereri for this date
+function getLabsForSelectedDate() {
+  var cereri = getCereriForSelectedDate();
+  var labSet = {};
+  for (var i = 0; i < cereri.length; i++) {
+    var items = cereri[i].items || [];
+    for (var j = 0; j < items.length; j++) {
+      var lab = items[j].laborator;
+      if (lab) labSet[lab] = true;
+    }
+  }
+  return Object.keys(labSet).sort();
+}
+
+function updateBorderouLabsDropdown() {
+  var labSelect = document.getElementById("borderouFilterLab");
+  var labs = getLabsForSelectedDate();
+  if (labs.length === 0) {
+    labSelect.innerHTML = '<option value="">Nicio cerere in ziua aleasa</option>';
+    document.getElementById("borderouStats").innerHTML = "";
+    document.getElementById("borderouPreview").innerHTML = '<div class="istoric-empty">Nu sunt cereri inregistrate pentru ' + esc(borderouState.selectedDate) + '.</div>';
+    return;
+  }
+  var html = '<option value="">Selecteaza laboratorul...</option>';
+  for (var i = 0; i < labs.length; i++) {
+    var hasTemplate = BORDEROU_TEMPLATES.indexOf(labs[i]) !== -1;
+    html += '<option value="' + esc(labs[i]) + '">' + esc(labs[i]) + (hasTemplate ? '' : ' (fara template)') + '</option>';
+  }
+  labSelect.innerHTML = html;
+  document.getElementById("borderouStats").innerHTML = "<strong>" + labs.length + "</strong> laboratoare cu cereri in ziua aleasa.";
+  // Restore previous selection if still valid
+  if (borderouState.selectedLab && labs.indexOf(borderouState.selectedLab) !== -1) {
+    labSelect.value = borderouState.selectedLab;
+    renderBorderouPreview();
+  } else {
+    borderouState.selectedLab = "";
+    document.getElementById("borderouPreview").innerHTML = '<div class="istoric-loading">Alege laboratorul pentru previzualizare.</div>';
+  }
+}
+
+// Get rows for the selected lab + date
+function buildBorderouRows() {
+  var cereri = getCereriForSelectedDate();
+  var lab = borderouState.selectedLab;
+  if (!lab) return [];
+  var rows = [];
+  for (var i = 0; i < cereri.length; i++) {
+    var c = cereri[i];
+    var items = c.items || [];
+    var labItems = items.filter(function(it) { return it.laborator === lab; });
+    if (labItems.length === 0) continue;
+    // Build column flags
+    var cols = { HLG:false, COAG:false, VSH:false, BCH:false, URINA:false, FECALE:false, TEXUDA:false, ALTELE:false };
+    var altele_names = [];
+    for (var j = 0; j < labItems.length; j++) {
+      var col = classifyAnaliza(labItems[j].denumire, labItems[j].categorie);
+      cols[col] = true;
+      if (col === "ALTELE") altele_names.push(labItems[j].denumire);
+    }
+    rows.push({
+      cerere_id: c.id,
+      created_at: c.created_at,
+      prenume: c.pacient_prenume || "",
+      nume: c.pacient_nume || "",
+      cnp: c.cnp_pacient || "",
+      cols: cols,
+      altele_names: altele_names,
+      analize_count: labItems.length
+    });
+  }
+  return rows;
+}
+
+function renderBorderouPreview() {
+  var lab = borderouState.selectedLab;
+  var listEl = document.getElementById("borderouPreview");
+  if (!lab) {
+    listEl.innerHTML = '<div class="istoric-loading">Alege laboratorul pentru previzualizare.</div>';
+    return;
+  }
+  var rows = buildBorderouRows();
+  if (rows.length === 0) {
+    listEl.innerHTML = '<div class="istoric-empty">Nicio cerere pentru ' + esc(lab) + ' in ' + esc(borderouState.selectedDate) + '.</div>';
+    return;
+  }
+  var hasTemplate = BORDEROU_TEMPLATES.indexOf(lab) !== -1;
+  var html = '';
+  html += '<div style="background:var(--cream);padding:14px 18px;border-radius:8px;margin-bottom:14px;border-left:3px solid var(--gold);">';
+  html += '<strong>' + rows.length + ' pacienti</strong> cu cereri la <strong>' + esc(lab) + '</strong> pentru data <strong>' + esc(borderouState.selectedDate) + '</strong>.';
+  if (!hasTemplate) {
+    html += '<div style="margin-top:8px;color:var(--accent);"><strong>⚠ Template indisponibil pentru ' + esc(lab) + '.</strong> Borderourile sunt momentan disponibile doar pentru: ' + BORDEROU_TEMPLATES.join(", ") + '.</div>';
+  }
+  html += '</div>';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html += '<thead><tr style="background:var(--ink);color:var(--paper);">';
+  html += '<th style="padding:8px;text-align:left;">Pacient</th>';
+  html += '<th style="padding:8px;">CNP</th>';
+  html += '<th style="padding:8px;">HLG</th><th style="padding:8px;">COAG</th><th style="padding:8px;">VSH</th>';
+  html += '<th style="padding:8px;">BCH</th><th style="padding:8px;">URINA</th><th style="padding:8px;">FECALE</th>';
+  html += '<th style="padding:8px;">EXSUDAT</th><th style="padding:8px;">ALTELE</th>';
+  html += '</tr></thead><tbody>';
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    html += '<tr style="border-bottom:1px solid rgba(15,17,23,0.08);">';
+    html += '<td style="padding:8px;">' + esc((r.prenume + " " + r.nume).trim() || "—") + '</td>';
+    html += '<td style="padding:8px;font-family:monospace;">' + esc(r.cnp) + '</td>';
+    var colKeys = ["HLG","COAG","VSH","BCH","URINA","FECALE","TEXUDA","ALTELE"];
+    for (var k = 0; k < colKeys.length; k++) {
+      html += '<td style="padding:8px;text-align:center;' + (r.cols[colKeys[k]] ? "color:var(--gold);font-weight:700;" : "color:rgba(15,17,23,0.2);") + '">' + (r.cols[colKeys[k]] ? "✓" : "") + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  listEl.innerHTML = html;
+}
+
+// ─── PDF generation ───
+// Helper: strip Romanian diacritics for jsPDF (Helvetica fonts handle only Latin1)
+function stripDiacritics(s) {
+  if (!s) return "";
+  return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function generateBorderouPDF() {
+  var lab = borderouState.selectedLab;
+  if (!lab) { alert("Alege un laborator."); return; }
+  if (BORDEROU_TEMPLATES.indexOf(lab) === -1) {
+    alert("Template indisponibil pentru " + lab + ".\nMomentan disponibile: " + BORDEROU_TEMPLATES.join(", ") + ".");
+    return;
+  }
+  var rows = buildBorderouRows();
+  if (rows.length === 0) {
+    alert("Nu sunt cereri pentru " + lab + " in ziua aleasa.");
+    return;
+  }
+  if (lab === "Derzelius") generatePDFDerzelius(rows);
+  else if (lab === "Clinica Sante") generatePDFSante(rows);
+  else if (lab === "Poliana") generatePDFPoliana(rows);
+}
+
+function _dateRO(iso) {
+  // Convert YYYY-MM-DD to DD.MM.YYYY
+  if (!iso || iso.length < 10) return iso || "";
+  var parts = iso.substring(0, 10).split("-");
+  return parts[2] + "." + parts[1] + "." + parts[0];
+}
+
+function generatePDFDerzelius(rows) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  var dateStr = _dateRO(borderouState.selectedDate);
+
+  // Header
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.text("FORMULAR RECOLTARE TRANSPORT", 148, 15, { align: "center" });
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text("CLINICA CENTRAL", 14, 24);
+  doc.text("CENTRU CERCETARE MEDICALA DERZELIUS", 282, 24, { align: "right" });
+  doc.text("Data: " + dateStr, 250, 15);
+
+  // Build table
+  var head = [["NUME PACIENT", "ID", "HLG", "COAG", "VSH", "BCH", "URINA", "FECALE", "T.EXUDA", "ALTELE", "DATA", "TEMP", "SEMNATURA\nPREDARE", "SEMNATURA\nPRIMIRE"]];
+  var body = rows.map(function(r) {
+    var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+    return [
+      name,
+      stripDiacritics(r.cnp || ""),
+      r.cols.HLG ? "X" : "",
+      r.cols.COAG ? "X" : "",
+      r.cols.VSH ? "X" : "",
+      r.cols.BCH ? "X" : "",
+      r.cols.URINA ? "X" : "",
+      r.cols.FECALE ? "X" : "",
+      r.cols.TEXUDA ? "X" : "",
+      r.cols.ALTELE ? "X" : "",
+      _dateRO(r.created_at),
+      "",  // TEMP — manual
+      "",  // Semnatura predare — manual
+      ""   // Semnatura primire — manual
+    ];
+  });
+
+  doc.autoTable({
+    head: head, body: body,
+    startY: 30,
+    theme: "grid",
+    styles: { fontSize: 8, cellPadding: 2, lineColor: [50,50,50], lineWidth: 0.1 },
+    headStyles: { fillColor: [240,240,240], textColor: [0,0,0], fontStyle: "bold", halign: "center" },
+    columnStyles: {
+      0: { cellWidth: 38 },
+      1: { cellWidth: 18, halign: "center" },
+      2: { cellWidth: 12, halign: "center" }, 3: { cellWidth: 12, halign: "center" },
+      4: { cellWidth: 12, halign: "center" }, 5: { cellWidth: 12, halign: "center" },
+      6: { cellWidth: 14, halign: "center" }, 7: { cellWidth: 14, halign: "center" },
+      8: { cellWidth: 14, halign: "center" }, 9: { cellWidth: 14, halign: "center" },
+      10: { cellWidth: 20, halign: "center" }, 11: { cellWidth: 14, halign: "center" },
+      12: { cellWidth: 25 }, 13: { cellWidth: 25 }
+    }
+  });
+
+  // Add empty rows for any "Altele" details at the bottom (optional)
+  var hasAltele = rows.some(function(r){ return r.altele_names.length > 0; });
+  if (hasAltele) {
+    var y = doc.lastAutoTable.finalY + 6;
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.text("ALTELE (detaliere):", 14, y);
+    doc.setFont("helvetica", "normal");
+    y += 5;
+    rows.forEach(function(r) {
+      if (r.altele_names.length > 0) {
+        var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+        var line = name + " (" + stripDiacritics(r.cnp) + "): " + stripDiacritics(r.altele_names.join(", "));
+        var split = doc.splitTextToSize(line, 270);
+        doc.text(split, 14, y);
+        y += split.length * 4;
+      }
+    });
+  }
+
+  var filename = "borderou_Derzelius_" + borderouState.selectedDate + ".pdf";
+  doc.save(filename);
+}
+
+function generatePDFSante(rows) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  var dateStr = _dateRO(borderouState.selectedDate);
+
+  // Header
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("CLINICA SANTE", 14, 14);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text("LAM. Pitesti", 14, 19);
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "bold");
+  doc.text("REGISTRU PREDARE-PRIMIRE PROBE RECOLTATE", 148, 14, { align: "center" });
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text("DATA: " + dateStr, 14, 26);
+  doc.text("Punct de recoltare: Clinica Central", 80, 26);
+
+  // Table head per Sante template
+  var head = [["NUME/PRENUME PACIENT","Ora\nrecoltarii","B","H","V","C","F","CO","U","L","ALTE","Ora\npreluare\ndin\ncabinet","t°\npreluare\ndin\ncabinet","Resp\npredare din\ncabinet\n(nume/sem)","Resp\nprimire\n(nume/sem)","t° predare\n(din lada/\nfrigider\ntransport)\nAUTO NR","Resp. triaj\n(nume/sem)\nORA PRIMIRII","Ora\nsosire\nin lab.","Resp.\npreluare\nin lab\n(nume/sem)","OBS"]];
+  // Sante: B=biochimie, H=hemoleucograma, V=VSH, C=coagulare, F=exudat faringian, CO=coprorecolt, U=urina, L=lame
+  var body = rows.map(function(r) {
+    var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+    return [
+      name,
+      "",  // Ora recoltarii - manual
+      r.cols.BCH ? "X" : "",
+      r.cols.HLG ? "X" : "",
+      r.cols.VSH ? "X" : "",
+      r.cols.COAG ? "X" : "",
+      r.cols.TEXUDA ? "X" : "",
+      r.cols.FECALE ? "X" : "",
+      r.cols.URINA ? "X" : "",
+      "",  // Lame - manual
+      r.cols.ALTELE ? "X" : "",
+      "", "", "", "", "", "", "", "", ""  // Manual semnaturi/timpi
+    ];
+  });
+
+  doc.autoTable({
+    head: head, body: body,
+    startY: 30,
+    theme: "grid",
+    styles: { fontSize: 6.5, cellPadding: 1.2, lineColor: [50,50,50], lineWidth: 0.1, valign: "middle" },
+    headStyles: { fillColor: [240,240,240], textColor: [0,0,0], fontStyle: "bold", halign: "center", fontSize: 6.5 },
+    columnStyles: {
+      0: { cellWidth: 30 }, 1: { cellWidth: 12, halign: "center" },
+      2: { cellWidth: 7, halign: "center" }, 3: { cellWidth: 7, halign: "center" }, 4: { cellWidth: 7, halign: "center" },
+      5: { cellWidth: 7, halign: "center" }, 6: { cellWidth: 7, halign: "center" }, 7: { cellWidth: 9, halign: "center" },
+      8: { cellWidth: 7, halign: "center" }, 9: { cellWidth: 7, halign: "center" }, 10: { cellWidth: 11, halign: "center" },
+      11: { cellWidth: 14 }, 12: { cellWidth: 12 }, 13: { cellWidth: 18 }, 14: { cellWidth: 18 },
+      15: { cellWidth: 16 }, 16: { cellWidth: 18 }, 17: { cellWidth: 12 }, 18: { cellWidth: 16 }, 19: { cellWidth: 14 }
+    }
+  });
+
+  // Footer with legend
+  var y = doc.lastAutoTable.finalY + 6;
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.text("Nota:", 14, y);
+  doc.setFont("helvetica", "normal");
+  y += 4;
+  var legend = [
+    "B - vacutainer biochimie",
+    "H - vacutainer hemoleucograma",
+    "V - vacutainer VSH",
+    "C - vacutainer coagulare",
+    "F - exudat faringian",
+    "CO - coprorecoltoare",
+    "U - recipiente urina",
+    "L - lame"
+  ];
+  legend.forEach(function(line) { doc.text(line, 14, y); y += 3.5; });
+
+  // Altele detalii
+  var hasAltele = rows.some(function(r){ return r.altele_names.length > 0; });
+  if (hasAltele) {
+    y += 3;
+    doc.setFont("helvetica", "bold");
+    doc.text("ALTELE (detaliere):", 14, y);
+    doc.setFont("helvetica", "normal");
+    y += 4;
+    rows.forEach(function(r) {
+      if (r.altele_names.length > 0) {
+        var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+        var line = name + ": " + stripDiacritics(r.altele_names.join(", "));
+        var split = doc.splitTextToSize(line, 270);
+        doc.text(split, 14, y);
+        y += split.length * 3.5;
+      }
+    });
+  }
+
+  var filename = "borderou_ClinicaSante_" + borderouState.selectedDate + ".pdf";
+  doc.save(filename);
+}
+
+function generatePDFPoliana(rows) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  var dateStr = _dateRO(borderouState.selectedDate);
+
+  // Header
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("CENTRELE MEDICALE POLIANA S.R.L.", 14, 14);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.text("PG-CMP-7.2 / FG-CMP-7.2-02, Ed. 05.01.2026", 220, 14);
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("FORMULAR DE INSOTIRE PROBE BIOLOGICE - CENTRELE MEDICALE POLIANA S.R.L.", 148, 20, { align: "center" });
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text("Punct recoltare: Clinica Central", 14, 28);
+  doc.text("Recoltat de: _______________________", 80, 28);
+  doc.text("Semnatura: _______________________", 160, 28);
+  doc.text("Data: " + dateStr, 240, 28);
+
+  // Poliana columns: Nr.Crt | Ora recoltare | ID Pacient | Nume Prenume | HLG | VSH | BIOCHIMIE | COAGULARE | SUMAR/UROCULTURA | Exudate/Tampoane/secretii | Coproparazit/coprocultura | Lame | Babes Lichid/HPV | EDTA dop sidef | Semnatura Asistent
+  var head = [[
+    "Nr.\nCrt.", "Ora\nrecoltare", "ID Pacient", "Nume Prenume pacient",
+    "HLG", "VSH", "BIOCHIMIE", "COAGULARE", "SUMAR/\nUROCULTURA",
+    "Exudate/\nTampoane/\nsecretii", "Coproparazit/\ncoprocultura", "Lame",
+    "Babes\nLichid/\nHPV", "EDTA\ndop sidef\n(viremii)", "Semnatura\nAsistent\nrecoltare"
+  ]];
+  var body = rows.map(function(r, idx) {
+    var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+    return [
+      String(idx + 1),
+      "",  // Ora - manual
+      stripDiacritics(r.cnp || ""),
+      name,
+      r.cols.HLG ? "X" : "",
+      r.cols.VSH ? "X" : "",
+      r.cols.BCH ? "X" : "",
+      r.cols.COAG ? "X" : "",
+      r.cols.URINA ? "X" : "",
+      r.cols.TEXUDA ? "X" : "",
+      r.cols.FECALE ? "X" : "",
+      "",  // Lame
+      "",
+      r.cols.ALTELE ? "X" : "",
+      ""   // Semnatura - manual
+    ];
+  });
+
+  doc.autoTable({
+    head: head, body: body,
+    startY: 33,
+    theme: "grid",
+    styles: { fontSize: 7, cellPadding: 1.5, lineColor: [50,50,50], lineWidth: 0.1, valign: "middle" },
+    headStyles: { fillColor: [240,240,240], textColor: [0,0,0], fontStyle: "bold", halign: "center", fontSize: 7 },
+    columnStyles: {
+      0: { cellWidth: 9, halign: "center" }, 1: { cellWidth: 14, halign: "center" },
+      2: { cellWidth: 22, halign: "center" }, 3: { cellWidth: 38 },
+      4: { cellWidth: 12, halign: "center" }, 5: { cellWidth: 12, halign: "center" },
+      6: { cellWidth: 16, halign: "center" }, 7: { cellWidth: 16, halign: "center" },
+      8: { cellWidth: 18, halign: "center" }, 9: { cellWidth: 18, halign: "center" },
+      10: { cellWidth: 20, halign: "center" }, 11: { cellWidth: 12, halign: "center" },
+      12: { cellWidth: 14, halign: "center" }, 13: { cellWidth: 16, halign: "center" },
+      14: { cellWidth: 25 }
+    }
+  });
+
+  // Footer
+  var y = doc.lastAutoTable.finalY + 8;
+  doc.setFontSize(9);
+  doc.text("Ora predarii probelor catre curier: _______", 14, y);
+  doc.text("Temperatura in geanta la predare: _______", 100, y);
+  doc.text("Semnatura predare probe catre curier: _______", 190, y);
+  y += 6;
+  doc.text("Curier: Tudorache Ilie Andrei", 14, y);
+  y += 6;
+  doc.text("Ora primirii probelor in laborator: _______", 14, y);
+  doc.text("Temperatura in geanta la primire: _______", 100, y);
+  doc.text("Semnatura primire probe in laborator: _______", 190, y);
+
+  // Altele detalii
+  var hasAltele = rows.some(function(r){ return r.altele_names.length > 0; });
+  if (hasAltele) {
+    y += 10;
+    doc.setFont("helvetica", "bold");
+    doc.text("ALTELE (detaliere):", 14, y);
+    doc.setFont("helvetica", "normal");
+    y += 4;
+    rows.forEach(function(r) {
+      if (r.altele_names.length > 0) {
+        var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+        var line = name + ": " + stripDiacritics(r.altele_names.join(", "));
+        var split = doc.splitTextToSize(line, 270);
+        doc.text(split, 14, y);
+        y += split.length * 3.5;
+      }
+    });
+  }
+
+  var filename = "borderou_Poliana_" + borderouState.selectedDate + ".pdf";
+  doc.save(filename);
+}
+
+// Event wiring
+document.getElementById("borderouFilterDate").addEventListener("change", function(e) {
+  borderouState.selectedDate = e.target.value;
+  updateBorderouLabsDropdown();
+});
+document.getElementById("borderouFilterDateField").addEventListener("change", function(e) {
+  borderouState.dateField = e.target.value;
+  updateBorderouLabsDropdown();
+});
+document.getElementById("borderouFilterLab").addEventListener("change", function(e) {
+  borderouState.selectedLab = e.target.value;
+  renderBorderouPreview();
+});
+document.getElementById("btnBorderouGenerate").addEventListener("click", generateBorderouPDF);
