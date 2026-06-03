@@ -862,7 +862,7 @@ function openReport() {
 
   var statsHtml = '<div class="report-stat"><span class="report-stat-num">' + r.items.length + '</span><span class="report-stat-label">Analize</span></div>';
   statsHtml += '<div class="report-stat"><span class="report-stat-num">' + r.groups.length + '</span><span class="report-stat-label">Laboratoare</span></div>';
-  statsHtml += '<div class="report-stat"><span class="report-stat-num">' + Math.round(r.grandListTotal - r.grandTotal) + '</span><span class="report-stat-label">RON sub pret lista</span></div>';
+  statsHtml += '<div class="report-stat"><span class="report-stat-num">' + Math.round(r.grandTotal) + '</span><span class="report-stat-label">RON total</span></div>';
   document.getElementById("reportStats").innerHTML = statsHtml;
 
   // Patient info header
@@ -948,9 +948,6 @@ function openReport() {
       } else {
         body += '<span class="lab-group-item-price-src" title="Pret din catalogul Clinica Central">CC</span>';
       }
-      if (it.offer.Pret && it.offer.Pret > it.finalPrice) {
-        body += '<span class="lab-group-item-price-orig">' + it.offer.Pret.toFixed(0) + ' RON lista</span>';
-      }
       body += '</div></div>';
     }
     body += '</div></div>';
@@ -962,7 +959,8 @@ function openReport() {
   body += '</div>';
 
   body += '<div class="report-actions">';
-  body += '<button class="report-btn primary" id="btnExportReport">&#11015; Export Excel</button>';
+  body += '<button class="report-btn primary" id="btnExportPdf">&#11015; Export PDF</button>';
+  body += '<button class="report-btn" id="btnExportReport">&#11015; Export Excel</button>';
   body += '<button class="report-btn" id="btnExportJson">&#11015; Export JSON</button>';
   body += '<button class="report-btn" id="btnCloseReport">Inchide</button>';
   body += '</div>';
@@ -972,6 +970,7 @@ function openReport() {
   document.body.style.overflow = "hidden";
 
   document.getElementById("btnCloseReport").addEventListener("click", closeReport);
+  document.getElementById("btnExportPdf").addEventListener("click", function() { exportReportPdf(r); });
   document.getElementById("btnExportReport").addEventListener("click", function() { exportReportXlsx(r); });
   document.getElementById("btnExportJson").addEventListener("click", function() { exportReportJson(r); });
 
@@ -1052,19 +1051,17 @@ function exportReportXlsx(r) {
         "Se trimite la": d && d.LaboratorSubcontractant ? d.LaboratorSubcontractant : "",
         "Observatii": d && d.Observatii ? d.Observatii : "",
         "Timp Executie": it.offer.Timp !== "N/A" ? it.offer.Timp : "",
-        "Pret Lista Laborator (RON)": it.offer.Pret,
-        "Pret Final (RON)": Math.round(it.finalPrice * 100) / 100,
-        "Sursa Pret": it.priceSource === "cc" ? "Catalog Clinica Central" : "Laborator cu discount + 5%",
-        "Diferenta fata de Lista (RON)": Math.round((it.offer.Pret - it.finalPrice) * 100) / 100
+        "Pret (RON)": Math.round(it.finalPrice * 100) / 100,
+        "Sursa Pret": it.priceSource === "cc" ? "Catalog Clinica Central" : "Laborator cu discount + 5%"
       });
     }
-    rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": grp.lab + " — Subtotal", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret Lista Laborator (RON)": grp.listTotal, "Pret Final (RON)": Math.round(grp.total * 100) / 100, "Sursa Pret": "", "Diferenta fata de Lista (RON)": Math.round((grp.listTotal - grp.total) * 100) / 100 });
+    rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": grp.lab + " — Subtotal", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret (RON)": Math.round(grp.total * 100) / 100, "Sursa Pret": "" });
     rows.push({});
   }
-  rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": "TOTAL GENERAL", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret Lista Laborator (RON)": r.grandListTotal, "Pret Final (RON)": Math.round(r.grandTotal * 100) / 100, "Sursa Pret": "", "Diferenta fata de Lista (RON)": Math.round((r.grandListTotal - r.grandTotal) * 100) / 100 });
+  rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": "TOTAL GENERAL", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret (RON)": Math.round(r.grandTotal * 100) / 100, "Sursa Pret": "" });
 
   var ws = XLSX.utils.json_to_sheet(rows);
-  ws["!cols"] = [{wch:22},{wch:15},{wch:22},{wch:45},{wch:34},{wch:18},{wch:14},{wch:28},{wch:40},{wch:18},{wch:18},{wch:14},{wch:24},{wch:18}];
+  ws["!cols"] = [{wch:22},{wch:15},{wch:22},{wch:45},{wch:34},{wch:18},{wch:14},{wch:28},{wch:40},{wch:18},{wch:14},{wch:24}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Cerere analize");
 
@@ -1106,6 +1103,248 @@ function exportReportXlsx(r) {
   XLSX.writeFile(wb, fn);
 }
 
+function exportReportPdf(r) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  var pageWidth = doc.internal.pageSize.getWidth();
+  var pageHeight = doc.internal.pageSize.getHeight();
+  var margin = 15;
+  var contentWidth = pageWidth - 2 * margin;
+  var y = margin;
+
+  // Strip diacritics for Helvetica (Latin1 only)
+  function s(text) {
+    if (!text) return "";
+    return String(text).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function ensureSpace(needed) {
+    if (y + needed > pageHeight - 15) {
+      doc.addPage();
+      y = margin;
+    }
+  }
+
+  function addLine(text, opts) {
+    opts = opts || {};
+    var fontSize = opts.fontSize || 10;
+    var style = opts.style || "normal";
+    var color = opts.color || [15, 17, 23];
+    var spacing = opts.spacing || (fontSize * 0.5);
+    doc.setFontSize(fontSize);
+    doc.setFont("helvetica", style);
+    doc.setTextColor(color[0], color[1], color[2]);
+    var lines = doc.splitTextToSize(s(text), contentWidth);
+    ensureSpace(lines.length * fontSize * 0.4 + spacing);
+    doc.text(lines, margin, y);
+    y += lines.length * fontSize * 0.4 + spacing;
+  }
+
+  // ─── Header / Antet clinica ───
+  doc.setFillColor(15, 17, 23);
+  doc.rect(0, 0, pageWidth, 22, "F");
+  doc.setFontSize(15);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(184, 151, 58); // gold
+  doc.text("CLINICA CENTRAL", margin, 10);
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(248, 246, 241); // cream
+  doc.text("Cerere analize", margin, 15);
+  // Top-right meta
+  doc.setFontSize(8);
+  doc.setTextColor(248, 246, 241);
+  var now = new Date();
+  doc.text("Generat: " + now.toLocaleString("ro-RO"), pageWidth - margin, 10, { align: "right" });
+  doc.text("Pitesti, Romania", pageWidth - margin, 15, { align: "right" });
+
+  y = 30;
+
+  // ─── Pacient ───
+  var fullName = [cartState.prenume.trim(), cartState.nume.trim()].filter(Boolean).join(" ");
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(184, 151, 58);
+  doc.text("PACIENT", margin, y);
+  y += 5;
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.4);
+  doc.line(margin, y, margin + 30, y);
+  y += 4;
+
+  doc.setFontSize(10);
+  doc.setTextColor(15, 17, 23);
+  doc.setFont("helvetica", "bold");
+  doc.text(s(fullName || "—"), margin, y);
+  doc.setFont("helvetica", "normal");
+  doc.text("CNP: " + s(cartState.cnp || "—"), pageWidth - margin, y, { align: "right" });
+  y += 5;
+
+  if (cartState.email) {
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text("Email: " + s(cartState.email), margin, y);
+    y += 4;
+  }
+  if (cartState.telefonNumar) {
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text("Telefon: " + s(cartState.telefonPrefix + " " + cartState.telefonNumar), margin, y);
+    y += 4;
+  }
+  y += 4;
+
+  // ─── Stats row (Analize / Lab / Total) ───
+  ensureSpace(15);
+  doc.setFillColor(248, 246, 241);
+  doc.rect(margin, y, contentWidth, 12, "F");
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.setFont("helvetica", "normal");
+  var col1x = margin + 5;
+  var col2x = margin + contentWidth / 3 + 5;
+  var col3x = margin + (2 * contentWidth / 3) + 5;
+  doc.text("ANALIZE", col1x, y + 4);
+  doc.text("LABORATOARE", col2x, y + 4);
+  doc.text("TOTAL", col3x, y + 4);
+  doc.setFontSize(14);
+  doc.setTextColor(15, 17, 23);
+  doc.setFont("helvetica", "bold");
+  doc.text(String(r.items.length), col1x, y + 10);
+  doc.text(String(r.groups.length), col2x, y + 10);
+  doc.text(Math.round(r.grandTotal) + " RON", col3x, y + 10);
+  y += 18;
+
+  // ─── Eprubete summary ───
+  var eprubete = buildEprubetSummary(r.items);
+  if (eprubete.length > 0) {
+    ensureSpace(15);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(184, 151, 58);
+    doc.text("EPRUBETE NECESARE PENTRU RECOLTARE", margin, y);
+    y += 4;
+    doc.setDrawColor(184, 151, 58);
+    doc.line(margin, y, margin + 70, y);
+    y += 5;
+
+    var epBody = eprubete.map(function(item) {
+      var locs = Object.keys(item.breakdown).map(function(loc) {
+        var cnt = item.breakdown[loc];
+        return (cnt > 1 ? cnt + "x " : "") + "-> " + loc;
+      }).join("\n");
+      return [String(item.count) + "x", s(item.tip), s(locs)];
+    });
+    doc.autoTable({
+      body: epBody,
+      startY: y,
+      theme: "grid",
+      styles: { fontSize: 9, cellPadding: 2.5, lineColor: [220, 217, 207], lineWidth: 0.2, valign: "top" },
+      columnStyles: {
+        0: { cellWidth: 14, halign: "center", fontStyle: "bold", textColor: [184, 151, 58] },
+        1: { cellWidth: 70, fontStyle: "bold" },
+        2: { fontSize: 8, textColor: [100, 100, 100] }
+      },
+      margin: { left: margin, right: margin }
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
+  // ─── Analize per laborator ───
+  ensureSpace(15);
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(184, 151, 58);
+  doc.text("ANALIZE PE LABORATOARE", margin, y);
+  y += 4;
+  doc.setDrawColor(184, 151, 58);
+  doc.line(margin, y, margin + 60, y);
+  y += 6;
+
+  for (var g = 0; g < r.groups.length; g++) {
+    var grp = r.groups[g];
+    ensureSpace(20);
+    // Lab name header
+    doc.setFillColor(15, 17, 23);
+    doc.rect(margin, y, contentWidth, 7, "F");
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(248, 246, 241);
+    doc.text(s(grp.lab), margin + 3, y + 5);
+    doc.setTextColor(184, 151, 58);
+    doc.text(grp.items.length + " analize  |  " + Math.round(grp.total) + " RON",
+             pageWidth - margin - 3, y + 5, { align: "right" });
+    y += 9;
+
+    // Items table for this lab
+    var labBody = [];
+    for (var i = 0; i < grp.items.length; i++) {
+      var it = grp.items[i];
+      var d = getDetails(grp.lab, it.displayName);
+      var detLines = [];
+      if (d) {
+        var recipient = fmtRecipient(d);
+        if (recipient) detLines.push("Eprubeta: " + recipient);
+        if (d.MaterialBiologic) detLines.push("Material: " + d.MaterialBiologic);
+        if (d.CantitateMinima) detLines.push("Cantitate: " + d.CantitateMinima);
+        if (d.LaboratorSubcontractant) detLines.push("Se trimite la: " + d.LaboratorSubcontractant);
+        if (d.Observatii) detLines.push("Atentie: " + d.Observatii);
+      }
+      if (it.offer.Timp && it.offer.Timp !== "N/A") {
+        detLines.unshift("Timp: " + it.offer.Timp);
+      }
+      var srcBadge = (it.priceSource === "lab+5%") ? " (lab+5%)" : "";
+      labBody.push([
+        s(it.displayName),
+        s(detLines.join("\n")),
+        Math.round(it.finalPrice) + " RON" + srcBadge
+      ]);
+    }
+    doc.autoTable({
+      body: labBody,
+      startY: y,
+      theme: "grid",
+      styles: { fontSize: 9, cellPadding: 2.5, lineColor: [220, 217, 207], lineWidth: 0.2, valign: "top" },
+      columnStyles: {
+        0: { cellWidth: 70, fontStyle: "bold" },
+        1: { fontSize: 7.5, textColor: [80, 80, 80] },
+        2: { cellWidth: 28, halign: "right", fontStyle: "bold", textColor: [15, 17, 23] }
+      },
+      margin: { left: margin, right: margin }
+    });
+    y = doc.lastAutoTable.finalY + 6;
+  }
+
+  // ─── Grand total ───
+  ensureSpace(20);
+  y += 2;
+  doc.setFillColor(184, 151, 58);
+  doc.rect(margin, y, contentWidth, 14, "F");
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(15, 17, 23);
+  doc.text("TOTAL DE PLATA", margin + 5, y + 9);
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.text(Math.round(r.grandTotal) + " RON", pageWidth - margin - 5, y + 9, { align: "right" });
+  y += 18;
+
+  // ─── Footer on each page ───
+  var totalPages = doc.internal.getNumberOfPages();
+  for (var p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    doc.setFont("helvetica", "normal");
+    doc.text("Clinica Central Pitesti  |  Cerere analize  |  " + s(fullName),
+             margin, pageHeight - 8);
+    doc.text("Pagina " + p + " / " + totalPages,
+             pageWidth - margin, pageHeight - 8, { align: "right" });
+  }
+
+  doc.save(buildPatientFilename("cerere_analize") + ".pdf");
+}
+
 function exportReportJson(r) {
   var now = new Date();
   var eprubeteForJson = buildEprubetSummary(r.items).map(function(item) {
@@ -1136,9 +1375,7 @@ function exportReportJson(r) {
     summary: {
       totalAnalize: r.items.length,
       totalLaboratoare: r.groups.length,
-      totalListRON: r.grandListTotal,
-      totalFinalRON: Math.round(r.grandTotal * 100) / 100,
-      diferentaListaRON: Math.round((r.grandListTotal - r.grandTotal) * 100) / 100,
+      totalRON: Math.round(r.grandTotal * 100) / 100,
       totalEprubete: totalEprubete,
       pretSursa: "Catalog Clinica Central (fallback: laborator cu discount + 5%)"
     },
@@ -1148,14 +1385,12 @@ function exportReportJson(r) {
       return {
         laborator: g.lab,
         numarAnalize: g.items.length,
-        subtotalListRON: g.listTotal,
-        subtotalFinalRON: Math.round(g.total * 100) / 100,
+        subtotalRON: Math.round(g.total * 100) / 100,
         analize: g.items.map(function(it) {
           var d = getDetails(g.lab, it.displayName);
           var entry = {
             denumire: it.displayName,
-            pretListaLaborator: it.offer.Pret,
-            pretFinal: Math.round(it.finalPrice * 100) / 100,
+            pret: Math.round(it.finalPrice * 100) / 100,
             sursaPret: it.priceSource === "cc" ? "Catalog Clinica Central" : "Laborator cu discount + 5%",
             timpExecutie: (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : null,
             categorie: (it.offer.Categorie && it.offer.Categorie !== "N/A") ? it.offer.Categorie : null
@@ -2271,7 +2506,7 @@ function showIstoricDetail(id) {
   if (c.user_email) {
     metaHtml += '<div class="istoric-detail-meta-row"><span>De catre:</span><strong>' + esc(c.user_email) + '</strong></div>';
   }
-  metaHtml += '<div class="istoric-detail-meta-row"><span>Total:</span><strong>' + Math.round(c.total_final_ron) + ' RON</strong> (lista: ' + Math.round(c.total_lista_ron) + ' RON)</div>';
+  metaHtml += '<div class="istoric-detail-meta-row"><span>Total:</span><strong>' + Math.round(c.total_final_ron) + ' RON</strong></div>';
   meta.innerHTML = metaHtml;
 
   // Body — show groups + items
