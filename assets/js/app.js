@@ -2159,6 +2159,247 @@ document.getElementById("detailsModal").addEventListener("click", function(e) {
 });
 
 // ════════════════════════════════════════════════════════════════
+// PHONE PAIRING (Etapa 1: QR card Paun scanning)
+// ════════════════════════════════════════════════════════════════
+
+var PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // same as Paun cards (no I/O/0/1)
+function generatePairSessionId() {
+  var id = "";
+  for (var i = 0; i < 8; i++) {
+    id += PAIR_ALPHABET[Math.floor(Math.random() * PAIR_ALPHABET.length)];
+  }
+  return id;
+}
+
+var pairState = {
+  sessionId: null,
+  channel: null,
+  realtimeSub: null
+};
+
+var pairModal = document.getElementById("pairModal");
+var pairLoading = document.getElementById("pairLoading");
+var pairContent = document.getElementById("pairContent");
+var pairSessionIdEl = document.getElementById("pairSessionId");
+var pairQrCanvas = document.getElementById("pairQrCanvas");
+var pairStatusDot = document.getElementById("pairStatusDot");
+var pairStatusText = document.getElementById("pairStatusText");
+
+document.getElementById("btnPairPhone").addEventListener("click", openPairModal);
+document.getElementById("pairModalClose").addEventListener("click", closePairModal);
+pairModal.addEventListener("click", function(e) {
+  if (e.target === pairModal) closePairModal();
+});
+
+async function openPairModal() {
+  if (!window.__CURRENT_USER__ || !window.sb) {
+    alert("Trebuie sa fii logat pentru a folosi aceasta functie.");
+    return;
+  }
+  pairModal.classList.add("visible");
+  pairLoading.style.display = "flex";
+  pairContent.style.display = "none";
+  pairStatusDot.classList.remove("connected");
+  pairStatusText.textContent = "Astept telefon...";
+
+  // 1. Generate session ID
+  var sid = generatePairSessionId();
+  pairState.sessionId = sid;
+
+  // 2. Insert into cc_pairing_sessions
+  try {
+    var insertRes = await window.sb.from("cc_pairing_sessions").insert([{
+      session_id: sid,
+      user_id: window.__CURRENT_USER__.id,
+      user_email: window.__CURRENT_USER__.email
+    }]).select();
+    if (insertRes.error) {
+      console.error("[pair] insert failed:", insertRes.error);
+      alert("Nu am putut crea sesiunea. Verifica conexiunea.");
+      closePairModal();
+      return;
+    }
+  } catch (e) {
+    console.error("[pair] insert exception:", e);
+    alert("Eroare la creare sesiune: " + e.message);
+    closePairModal();
+    return;
+  }
+
+  // 3. Generate QR code (URL that opens scan page on phone)
+  var scanUrl = window.location.origin + "/scan.html?s=" + sid;
+  generatePairQR(scanUrl);
+  pairSessionIdEl.textContent = sid;
+
+  // 4. Subscribe to Realtime broadcast channel
+  subscribeToPairingChannel(sid);
+
+  pairLoading.style.display = "none";
+  pairContent.style.display = "block";
+}
+
+function generatePairQR(text) {
+  pairQrCanvas.innerHTML = "";
+  try {
+    var qr = qrcode(0, "M"); // type 0 = auto-size, error correction M
+    qr.addData(text);
+    qr.make();
+    // 8px per cell, 4 cell border
+    var size = 280;
+    pairQrCanvas.innerHTML = qr.createSvgTag(8, 4);
+    var svg = pairQrCanvas.querySelector("svg");
+    if (svg) {
+      svg.setAttribute("width", String(size));
+      svg.setAttribute("height", String(size));
+    }
+  } catch (e) {
+    console.error("[pair] QR generation failed:", e);
+    pairQrCanvas.innerHTML = '<div style="color:red">Nu am putut genera codul QR</div>';
+  }
+}
+
+function subscribeToPairingChannel(sessionId) {
+  if (!window.sb || !window.sb.channel) {
+    console.warn("[pair] Supabase Realtime not available");
+    return;
+  }
+  // Clean up any previous subscription
+  if (pairState.channel) {
+    try { window.sb.removeChannel(pairState.channel); } catch (e) {}
+    pairState.channel = null;
+  }
+
+  var ch = window.sb.channel("pairing:" + sessionId, {
+    config: { broadcast: { ack: false, self: false } }
+  });
+
+  // Phone connected event
+  ch.on("broadcast", { event: "phone_connected" }, function(payload) {
+    console.log("[pair] phone connected:", payload);
+    pairStatusDot.classList.add("connected");
+    pairStatusText.textContent = "Telefon conectat";
+    showPairToast("Telefon conectat", "Acum poti scana QR cardul Paun sau bilete de trimitere");
+  });
+
+  // Patient scanned via Paun card
+  ch.on("broadcast", { event: "scan_patient" }, function(payload) {
+    console.log("[pair] scan_patient:", payload);
+    handleScannedPatient(payload.payload || payload);
+  });
+
+  // Patient scanned via bilet (Etapa 2 - placeholder)
+  ch.on("broadcast", { event: "scan_bilet" }, function(payload) {
+    console.log("[pair] scan_bilet (Etapa 2 not yet wired):", payload);
+  });
+
+  ch.subscribe(function(status) {
+    console.log("[pair] channel status:", status);
+  });
+
+  pairState.channel = ch;
+}
+
+function showPairToast(title, sub) {
+  var existing = document.querySelector(".pair-toast");
+  if (existing) existing.remove();
+  var t = document.createElement("div");
+  t.className = "pair-toast";
+  t.innerHTML = '<strong>' + esc(title) + '</strong>' +
+                (sub ? '<span class="toast-sub">' + esc(sub) + '</span>' : '');
+  document.body.appendChild(t);
+  setTimeout(function() { t.classList.add("visible"); }, 10);
+  setTimeout(function() {
+    t.classList.remove("visible");
+    setTimeout(function() { t.remove(); }, 400);
+  }, 4500);
+}
+
+// Handle data received from phone when it scans a Paun QR card
+function handleScannedPatient(data) {
+  // data: { codPaun, prenume, nume, cnp, email, telefon, telefonPrefix, discountPct }
+  if (!data) return;
+
+  // Switch to cart view if not already
+  switchView("cart");
+
+  // Auto-populate patient fields
+  if (data.prenume) {
+    cartState.prenume = data.prenume;
+    prenumeInput.value = data.prenume;
+    cartState.prenumeValid = true;
+  }
+  if (data.nume) {
+    cartState.nume = data.nume;
+    numeInput.value = data.nume;
+    cartState.numeValid = true;
+  }
+  if (data.cnp) {
+    cartState.cnp = data.cnp;
+    cnpInput.value = data.cnp;
+    cartState.cnpValid = isCnpValid(data.cnp);
+  }
+  if (data.email) {
+    cartState.email = data.email;
+    emailInput.value = data.email;
+  }
+  if (data.telefon) {
+    cartState.telefonNumar = data.telefon;
+    telefonNumarInput.value = data.telefon;
+    if (data.telefonPrefix) {
+      cartState.telefonPrefix = data.telefonPrefix;
+      telefonPrefixSelect.value = data.telefonPrefix;
+    }
+  }
+
+  // Apply Paun discount if present
+  if (typeof data.discountPct === "number" && data.discountPct > 0) {
+    cartState.paunDiscountPct = data.discountPct;
+    cartState.paunCodCard = data.codPaun || null;
+    showPairToast(
+      "Card Paun: " + data.discountPct + "%",
+      "Discount aplicat automat la analize: " + [data.prenume, data.nume].filter(Boolean).join(" ")
+    );
+  } else {
+    cartState.paunDiscountPct = 0;
+    cartState.paunCodCard = data.codPaun || null;
+    showPairToast(
+      "Client identificat",
+      (data.prenume && data.nume) ? (data.prenume + " " + data.nume) : "Date precompletate"
+    );
+  }
+
+  updateCnpUi();
+  updatePacientValidation();
+  renderCart(); // re-render to apply discount if any
+  closePairModal();
+}
+
+function closePairModal() {
+  pairModal.classList.remove("visible");
+  // Keep the session alive in DB; just close the channel locally
+  // (laptop may reopen pairing later in same session window)
+}
+
+// Apply Paun discount when computing effective price
+// (override of effectivePrice to consider Paun discount)
+var __origEffectivePrice = effectivePrice;
+effectivePrice = function(denumire, laborator, pretLista) {
+  var base = __origEffectivePrice(denumire, laborator, pretLista);
+  if (cartState.paunDiscountPct && cartState.paunDiscountPct > 0) {
+    var discounted = base.price * (1 - cartState.paunDiscountPct / 100);
+    return {
+      price: Math.round(discounted * 100) / 100,
+      source: base.source + "+paun" + cartState.paunDiscountPct + "%"
+    };
+  }
+  return base;
+};
+
+// Initialize Paun fields in cartState
+cartState.paunDiscountPct = 0;
+cartState.paunCodCard = null;
+
+// ════════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════════
 updateCnpUi();
