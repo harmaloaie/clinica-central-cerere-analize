@@ -2329,3 +2329,73 @@ footer strong { color: var(--gold); }
   flex: 1;
   min-width: 0;
 }
+
+/* ═══ Pret Clinica Central ═══ */
+/* In tabel comparator */
+.price-col-cc { white-space: nowrap; }
+.price-cell-cc {
+  text-align: right;
+  white-space: nowrap;
+}
+.price-cc {
+  font-weight: 700;
+  color: var(--gold);
+  font-size: 14px;
+}
+.price-cc-na {
+  color: rgba(15,17,23,0.25);
+  font-size: 13px;
+}
+/* In cart item */
+.cart-item-price-cc {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gold);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+/* ═══ Istoric row action buttons ═══ */
+.istoric-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.istoric-btn-xlsx,
+.istoric-btn-json {
+  background: rgba(15,17,23,0.06) !important;
+  color: var(--ink) !important;
+  border: 1px solid rgba(15,17,23,0.12) !important;
+}
+.istoric-btn-xlsx:hover,
+.istoric-btn-json:hover {
+  background: rgba(15,17,23,0.12) !important;
+}
+.istoric-btn-new {
+  background: rgba(184,151,58,0.15) !important;
+  color: var(--gold) !important;
+  border: 1px solid rgba(184,151,58,0.35) !important;
+}
+.istoric-btn-new:hover {
+  background: rgba(184,151,58,0.28) !important;
+}
+.istoric-btn-same {
+  background: var(--ink) !important;
+  color: var(--paper) !important;
+  border: 1px solid var(--ink) !important;
+}
+.istoric-btn-same:hover {
+  opacity: 0.85;
+}
+@media (max-width: 700px) {
+  .istoric-row-actions {
+    width: 100%;
+    margin-top: 8px;
+  }
+  .istoric-row-actions .istoric-row-btn {
+    flex: 1;
+    min-width: 80px;
+    text-align: center;
+  }
+}
