@@ -86,6 +86,32 @@ function effectivePrice(denumire, laborator, pretLista) {
   var discounted = finalPrice(pretLista, laborator);
   return { price: Math.round(discounted * 1.05 * 100) / 100, source: "lab+5%" };
 }
+
+// Cached base64 representation of the topbar logo, used for PDF exports.
+// We convert via canvas once, then reuse. Returns { dataUrl, w, h } or null if unavailable.
+var __LOGO_CACHE__ = null;
+function getLogoForPdf() {
+  if (__LOGO_CACHE__) return __LOGO_CACHE__;
+  try {
+    var img = document.querySelector(".topbar-logo");
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    var canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    var ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    __LOGO_CACHE__ = {
+      dataUrl: canvas.toDataURL("image/jpeg", 0.92),
+      w: img.naturalWidth,
+      h: img.naturalHeight
+    };
+    return __LOGO_CACHE__;
+  } catch (e) {
+    console.warn("[getLogoForPdf] cannot read logo:", e);
+    return null;
+  }
+}
+
 function fmtRecipient(d) {
   if (!d) return "";
   var parts = [];
@@ -1142,23 +1168,51 @@ function exportReportPdf(r) {
 
   // ─── Header / Antet clinica ───
   doc.setFillColor(15, 17, 23);
-  doc.rect(0, 0, pageWidth, 22, "F");
+  doc.rect(0, 0, pageWidth, 26, "F");
+
+  // Logo in top-left corner (white background block for visibility on dark header)
+  var logo = getLogoForPdf();
+  var logoBoxSize = 18;       // square box on page
+  var titleX = margin;        // default: where title starts if no logo
+  if (logo) {
+    // White rounded background so logo (which has white bg) blends nicely on dark header
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(margin, 4, logoBoxSize, logoBoxSize, 1.5, 1.5, "F");
+    // Compute fit-inside dimensions preserving aspect ratio
+    var pad = 1.5;
+    var maxW = logoBoxSize - 2 * pad;
+    var maxH = logoBoxSize - 2 * pad;
+    var ratio = logo.w / logo.h;
+    var dw, dh;
+    if (ratio > maxW / maxH) {
+      dw = maxW; dh = maxW / ratio;
+    } else {
+      dh = maxH; dw = maxH * ratio;
+    }
+    var dx = margin + (logoBoxSize - dw) / 2;
+    var dy = 4 + (logoBoxSize - dh) / 2;
+    try {
+      doc.addImage(logo.dataUrl, "JPEG", dx, dy, dw, dh);
+    } catch (e) { /* silent fail */ }
+    titleX = margin + logoBoxSize + 5;
+  }
+
   doc.setFontSize(15);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(184, 151, 58); // gold
-  doc.text("CLINICA CENTRAL", margin, 10);
+  doc.text("CLINICA CENTRAL", titleX, 12);
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(248, 246, 241); // cream
-  doc.text("Cerere analize", margin, 15);
+  doc.text("Cerere analize", titleX, 17);
   // Top-right meta
   doc.setFontSize(8);
   doc.setTextColor(248, 246, 241);
   var now = new Date();
-  doc.text("Generat: " + now.toLocaleString("ro-RO"), pageWidth - margin, 10, { align: "right" });
-  doc.text("Pitesti, Romania", pageWidth - margin, 15, { align: "right" });
+  doc.text("Generat: " + now.toLocaleString("ro-RO"), pageWidth - margin, 12, { align: "right" });
+  doc.text("Pitesti, Romania", pageWidth - margin, 17, { align: "right" });
 
-  y = 30;
+  y = 34;
 
   // ─── Pacient ───
   var fullName = [cartState.prenume.trim(), cartState.nume.trim()].filter(Boolean).join(" ");
@@ -1194,25 +1248,24 @@ function exportReportPdf(r) {
   }
   y += 4;
 
-  // ─── Stats row (Analize / Lab / Total) ───
+  // ─── Stats row (ink-light: no fill, gray rules) ───
   ensureSpace(15);
-  doc.setFillColor(248, 246, 241);
-  doc.rect(margin, y, contentWidth, 12, "F");
+  doc.setDrawColor(220, 217, 207);
+  doc.setLineWidth(0.3);
+  doc.line(margin, y, pageWidth - margin, y);
+  doc.line(margin, y + 12, pageWidth - margin, y + 12);
   doc.setFontSize(8);
   doc.setTextColor(120, 120, 120);
   doc.setFont("helvetica", "normal");
-  var col1x = margin + 5;
-  var col2x = margin + contentWidth / 3 + 5;
-  var col3x = margin + (2 * contentWidth / 3) + 5;
+  var col1x = margin + 2;
+  var col2x = margin + contentWidth / 2 + 2;
   doc.text("ANALIZE", col1x, y + 4);
-  doc.text("LABORATOARE", col2x, y + 4);
-  doc.text("TOTAL", col3x, y + 4);
+  doc.text("TOTAL", col2x, y + 4);
   doc.setFontSize(14);
   doc.setTextColor(15, 17, 23);
   doc.setFont("helvetica", "bold");
   doc.text(String(r.items.length), col1x, y + 10);
-  doc.text(String(r.groups.length), col2x, y + 10);
-  doc.text(Math.round(r.grandTotal) + " RON", col3x, y + 10);
+  doc.text(Math.round(r.grandTotal) + " RON", col2x, y + 10);
   y += 18;
 
   // ─── Eprubete summary ───
@@ -1229,21 +1282,25 @@ function exportReportPdf(r) {
     y += 5;
 
     var epBody = eprubete.map(function(item) {
-      var locs = Object.keys(item.breakdown).map(function(loc) {
-        var cnt = item.breakdown[loc];
-        return (cnt > 1 ? cnt + "x " : "") + "-> " + loc;
-      }).join("\n");
-      return [String(item.count) + "x", s(item.tip), s(locs)];
+      return [String(item.count) + "x", s(item.tip)];
     });
     doc.autoTable({
       body: epBody,
       startY: y,
-      theme: "grid",
-      styles: { fontSize: 9, cellPadding: 2.5, lineColor: [220, 217, 207], lineWidth: 0.2, valign: "top" },
+      theme: "plain",
+      styles: { fontSize: 9, cellPadding: 2.5, valign: "top" },
       columnStyles: {
         0: { cellWidth: 14, halign: "center", fontStyle: "bold", textColor: [184, 151, 58] },
-        1: { cellWidth: 70, fontStyle: "bold" },
-        2: { fontSize: 8, textColor: [100, 100, 100] }
+        1: { fontStyle: "bold" }
+      },
+      didDrawCell: function(data) {
+        // Bottom hairline between rows
+        if (data.section === "body" && data.column.index === 0) {
+          doc.setDrawColor(230, 228, 220);
+          doc.setLineWidth(0.15);
+          doc.line(data.cell.x, data.cell.y + data.cell.height,
+                   pageWidth - margin, data.cell.y + data.cell.height);
+        }
       },
       margin: { left: margin, right: margin }
     });
@@ -1255,79 +1312,97 @@ function exportReportPdf(r) {
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(184, 151, 58);
-  doc.text("ANALIZE PE LABORATOARE", margin, y);
+  doc.text("ANALIZE", margin, y);
   y += 4;
   doc.setDrawColor(184, 151, 58);
-  doc.line(margin, y, margin + 60, y);
+  doc.line(margin, y, margin + 25, y);
   y += 6;
 
+  // Flatten all items across labs into one list (no lab name shown)
+  var allItems = [];
   for (var g = 0; g < r.groups.length; g++) {
-    var grp = r.groups[g];
-    ensureSpace(20);
-    // Lab name header
-    doc.setFillColor(15, 17, 23);
-    doc.rect(margin, y, contentWidth, 7, "F");
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(248, 246, 241);
-    doc.text(s(grp.lab), margin + 3, y + 5);
-    doc.setTextColor(184, 151, 58);
-    doc.text(grp.items.length + " analize  |  " + Math.round(grp.total) + " RON",
-             pageWidth - margin - 3, y + 5, { align: "right" });
-    y += 9;
-
-    // Items table for this lab
-    var labBody = [];
-    for (var i = 0; i < grp.items.length; i++) {
-      var it = grp.items[i];
-      var d = getDetails(grp.lab, it.displayName);
-      var detLines = [];
-      if (d) {
-        var recipient = fmtRecipient(d);
-        if (recipient) detLines.push("Eprubeta: " + recipient);
-        if (d.MaterialBiologic) detLines.push("Material: " + d.MaterialBiologic);
-        if (d.CantitateMinima) detLines.push("Cantitate: " + d.CantitateMinima);
-        if (d.LaboratorSubcontractant) detLines.push("Se trimite la: " + d.LaboratorSubcontractant);
-        if (d.Observatii) detLines.push("Atentie: " + d.Observatii);
-      }
-      if (it.offer.Timp && it.offer.Timp !== "N/A") {
-        detLines.unshift("Timp: " + it.offer.Timp);
-      }
-      var srcBadge = (it.priceSource === "lab+5%") ? " (lab+5%)" : "";
-      labBody.push([
-        s(it.displayName),
-        s(detLines.join("\n")),
-        Math.round(it.finalPrice) + " RON" + srcBadge
-      ]);
+    for (var i = 0; i < r.groups[g].items.length; i++) {
+      allItems.push({ item: r.groups[g].items[i], lab: r.groups[g].lab });
     }
-    doc.autoTable({
-      body: labBody,
-      startY: y,
-      theme: "grid",
-      styles: { fontSize: 9, cellPadding: 2.5, lineColor: [220, 217, 207], lineWidth: 0.2, valign: "top" },
-      columnStyles: {
-        0: { cellWidth: 70, fontStyle: "bold" },
-        1: { fontSize: 7.5, textColor: [80, 80, 80] },
-        2: { cellWidth: 28, halign: "right", fontStyle: "bold", textColor: [15, 17, 23] }
-      },
-      margin: { left: margin, right: margin }
-    });
-    y = doc.lastAutoTable.finalY + 6;
+  }
+  // Sort alphabetically by name for a clean look
+  allItems.sort(function(a, b) {
+    return a.item.displayName.localeCompare(b.item.displayName, "ro");
+  });
+
+  var allBody = [];
+  for (var i = 0; i < allItems.length; i++) {
+    var entry = allItems[i];
+    var it = entry.item;
+    var d = getDetails(entry.lab, it.displayName);
+    var detLines = [];
+    if (d) {
+      var recipient = fmtRecipient(d);
+      if (recipient) detLines.push("Eprubeta: " + recipient);
+      if (d.MaterialBiologic) detLines.push("Material: " + d.MaterialBiologic);
+      if (d.CantitateMinima) detLines.push("Cantitate: " + d.CantitateMinima);
+      // Note: "Se trimite la" (subcontractant) intentionally omitted to hide lab info
+      if (d.Observatii) detLines.push("Atentie: " + d.Observatii);
+    }
+    if (it.offer.Timp && it.offer.Timp !== "N/A") {
+      detLines.unshift("Timp: " + it.offer.Timp);
+    }
+    allBody.push([
+      String(i + 1),
+      s(it.displayName),
+      s(detLines.join("\n")),
+      Math.round(it.finalPrice) + " RON"
+    ]);
   }
 
-  // ─── Grand total ───
   ensureSpace(20);
-  y += 2;
-  doc.setFillColor(184, 151, 58);
-  doc.rect(margin, y, contentWidth, 14, "F");
+  doc.autoTable({
+    head: [["#", "Denumire analiza", "Detalii recoltare", "Pret"]],
+    body: allBody,
+    startY: y,
+    theme: "plain",
+    styles: { fontSize: 9, cellPadding: 2.5, valign: "top" },
+    headStyles: { textColor: [184, 151, 58], fontStyle: "bold", fontSize: 9 },
+    columnStyles: {
+      0: { cellWidth: 8, halign: "center", textColor: [120, 120, 120] },
+      1: { cellWidth: 70, fontStyle: "bold" },
+      2: { fontSize: 7.5, textColor: [80, 80, 80] },
+      3: { cellWidth: 24, halign: "right", fontStyle: "bold", textColor: [15, 17, 23] }
+    },
+    didDrawCell: function(data) {
+      // Gold rule under header, gray hairlines under body rows
+      if (data.column.index === 0) {
+        if (data.section === "head") {
+          doc.setDrawColor(184, 151, 58);
+          doc.setLineWidth(0.4);
+        } else {
+          doc.setDrawColor(230, 228, 220);
+          doc.setLineWidth(0.15);
+        }
+        doc.line(data.cell.x, data.cell.y + data.cell.height,
+                 pageWidth - margin, data.cell.y + data.cell.height);
+      }
+    },
+    margin: { left: margin, right: margin }
+  });
+  y = doc.lastAutoTable.finalY + 6;
+
+  // ─── Grand total (ink-light: gold rules instead of filled bar) ───
+  ensureSpace(20);
+  y += 4;
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.6);
+  doc.line(margin, y, pageWidth - margin, y);          // top rule
+  doc.line(margin, y + 14, pageWidth - margin, y + 14); // bottom rule
   doc.setFontSize(11);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(15, 17, 23);
-  doc.text("TOTAL DE PLATA", margin + 5, y + 9);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(120, 120, 120);
+  doc.text("TOTAL DE PLATA", margin + 2, y + 9);
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
-  doc.text(Math.round(r.grandTotal) + " RON", pageWidth - margin - 5, y + 9, { align: "right" });
-  y += 18;
+  doc.setTextColor(184, 151, 58);
+  doc.text(Math.round(r.grandTotal) + " RON", pageWidth - margin - 2, y + 9, { align: "right" });
+  y += 20;
 
   // ─── Footer on each page ───
   var totalPages = doc.internal.getNumberOfPages();
@@ -2305,6 +2380,7 @@ function renderIstoric() {
     html += '<div class="istoric-row-price"><strong>' + Math.round(c.total_final_ron) + '</strong> RON</div>';
     html += '<div class="istoric-row-actions">';
     html += '<button class="istoric-row-btn" data-act="detalii" data-id="' + esc(c.id) + '">Detalii</button>';
+    html += '<button class="istoric-row-btn istoric-btn-pdf" data-act="pdf" data-id="' + esc(c.id) + '">PDF</button>';
     html += '<button class="istoric-row-btn istoric-btn-xlsx" data-act="xlsx" data-id="' + esc(c.id) + '">Excel</button>';
     html += '<button class="istoric-row-btn istoric-btn-json" data-act="json" data-id="' + esc(c.id) + '">JSON</button>';
     html += '<button class="istoric-row-btn istoric-btn-new" data-act="noua" data-id="' + esc(c.id) + '">Cerere noua</button>';
@@ -2321,6 +2397,7 @@ function renderIstoric() {
         var id = btn.getAttribute("data-id");
         var act = btn.getAttribute("data-act");
         if (act === "detalii") showIstoricDetail(id);
+        else if (act === "pdf") exportIstoricPdf(id);
         else if (act === "xlsx") exportIstoricXlsx(id);
         else if (act === "json") exportIstoricJson(id);
         else if (act === "noua") cerereNouaDinIstoric(id);
@@ -2384,6 +2461,26 @@ function exportIstoricXlsx(id) {
   var r = rebuildReportFromCerere(c);
   exportReportXlsx(r);
   // Restore
+  cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
+  cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
+}
+
+// ─── Export PDF from istoric ───
+function exportIstoricPdf(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  var saved = {
+    prenume: cartState.prenume, nume: cartState.nume, cnp: cartState.cnp,
+    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar
+  };
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.cnp = c.cnp_pacient || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  var r = rebuildReportFromCerere(c);
+  exportReportPdf(r);
   cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
   cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
 }
