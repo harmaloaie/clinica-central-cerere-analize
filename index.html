@@ -10,6 +10,8 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.0/jspdf.plugin.autotable.min.js"></script>
 <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 <body>
@@ -27,6 +29,7 @@
       <button class="topbar-tab active" data-view="cart" role="tab" aria-selected="true">Cerere analize</button>
       <button class="topbar-tab" data-view="browse" role="tab" aria-selected="false">Explorator preturi</button>
       <button class="topbar-tab" data-view="istoric" role="tab" aria-selected="false">Istoric cereri</button>
+      <button class="topbar-tab" data-view="borderouri" role="tab" aria-selected="false">Borderouri</button>
     </nav>
     <div class="topbar-user">
       <span id="topbarUserEmail"></span>
@@ -273,7 +276,44 @@
   </main>
 </div>
 
-<!-- Modal vizualizare detaliata cerere din istoric -->
+<div class="view" id="viewBorderouri" style="display:none">
+  <main class="main wide">
+    <div class="istoric-header">
+      <div>
+        <div class="pane-label">Borderouri</div>
+        <h2 class="pane-title">Generare borderouri pentru laboratoare</h2>
+        <p class="pane-sub">Selecteaza data si laboratorul. Genereaza un PDF de tip borderou cu toti pacientii / analizele trimise la acel laborator in ziua respectiva.</p>
+      </div>
+    </div>
+
+    <div class="istoric-filters" id="borderouFilters">
+      <div class="istoric-filter">
+        <label for="borderouFilterDate">Data</label>
+        <input type="date" id="borderouFilterDate">
+      </div>
+      <div class="istoric-filter">
+        <label for="borderouFilterDateField">Tip data</label>
+        <select id="borderouFilterDateField" style="padding:8px 10px;border:1.5px solid rgba(15,17,23,0.15);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;">
+          <option value="created_at" selected>Data procesarii (created_at)</option>
+          <option value="data_cerere">Data cererii (data_cerere)</option>
+        </select>
+      </div>
+      <div class="istoric-filter">
+        <label for="borderouFilterLab">Laborator</label>
+        <select id="borderouFilterLab" style="padding:8px 10px;border:1.5px solid rgba(15,17,23,0.15);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;min-width:200px;">
+          <option value="">Selecteaza data intai...</option>
+        </select>
+      </div>
+      <button type="button" class="istoric-btn-clear" id="btnBorderouGenerate" style="background:var(--ink);color:var(--paper);">Genereaza borderou PDF</button>
+    </div>
+
+    <div class="istoric-stats" id="borderouStats"></div>
+
+    <div class="istoric-list" id="borderouPreview">
+      <div class="istoric-loading">Alege data si laboratorul, apoi vezi aici previzualizarea.</div>
+    </div>
+  </main>
+</div>
 <div class="modal-overlay" id="istoricDetailModal">
   <div class="modal-box istoric-detail-box">
     <button class="modal-close" id="istoricDetailClose" type="button" aria-label="Inchide">&times;</button>
