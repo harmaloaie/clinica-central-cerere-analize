@@ -12,6 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.0/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 <body>
@@ -96,6 +97,10 @@
         <button type="button" class="scan-btn" id="btnScan">
           <span class="scan-icon">&#128247;</span>
           <span>Scaneaza bilet de trimitere</span>
+        </button>
+        <button type="button" class="scan-btn scan-btn-pair" id="btnPairPhone">
+          <span class="scan-icon">&#128241;</span>
+          <span>Conecteaza telefon pentru scanare</span>
         </button>
       </div>
 
@@ -399,6 +404,40 @@
       <div id="scanResultSummary" class="scan-result-summary"></div>
     </div>
     <div class="modal-body" id="scanResultBody"></div>
+  </div>
+</div>
+
+<!-- Phone pairing modal -->
+<div class="modal-overlay" id="pairModal">
+  <div class="modal-box pair-box">
+    <button class="modal-close" id="pairModalClose" type="button" aria-label="Inchide">&times;</button>
+    <div class="modal-header">
+      <div class="modal-tag">Conectare telefon</div>
+      <h2 class="modal-title">Scaneaza codul cu telefonul</h2>
+      <p class="pair-sub">Deschide camera native sau orice scaner QR pe telefon si indrepta camera spre codul de mai jos. Browser-ul de pe telefon se va deschide automat.</p>
+    </div>
+    <div class="modal-body">
+      <div id="pairLoading" class="pair-loading">
+        <div class="scan-spinner"></div>
+        <div>Se pregateste sesiunea...</div>
+      </div>
+      <div id="pairContent" style="display:none">
+        <div class="pair-qr-container">
+          <div id="pairQrCanvas" class="pair-qr-canvas"></div>
+          <div class="pair-session-id">
+            Sesiune: <strong id="pairSessionId"></strong>
+          </div>
+        </div>
+        <div class="pair-status" id="pairStatus">
+          <div class="pair-status-dot" id="pairStatusDot"></div>
+          <span id="pairStatusText">Astept telefon...</span>
+        </div>
+        <div class="pair-hint">
+          <strong>Important:</strong> Telefonul se deconecteaza dupa 8 ore sau cand inchizi pagina de pe telefon.
+          Sesiunea functioneaza fara probleme pe orice retea (WiFi sau date mobile).
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
