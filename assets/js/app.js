@@ -69,6 +69,13 @@ function getDetails(lab, denumire) {
   if (!map) return null;
   return map[normName(denumire)] || null;
 }
+
+// Pret Clinica Central (catalog propriu) — keyed by normalized name
+var PRETURI_CC = window.__PRETURI_CC__ || {};
+function getCCPrice(denumire) {
+  var p = PRETURI_CC[normName(denumire)];
+  return (typeof p === "number") ? p : null;
+}
 function fmtRecipient(d) {
   if (!d) return "";
   var parts = [];
@@ -682,6 +689,10 @@ function renderCart() {
     html += '<div class="cart-item-price">' + fp + ' RON</div>';
     if (disc > 0) {
       html += '<div class="cart-item-price-orig">' + offer.Pret.toFixed(0) + ' RON</div>';
+    }
+    var ccp = getCCPrice(c.displayName);
+    if (ccp !== null) {
+      html += '<div class="cart-item-price-cc" title="Pret Clinica Central">CC: ' + ccp.toFixed(0) + ' RON</div>';
     }
     html += '<button class="cart-item-remove" data-key="' + esc(c.key) + '" data-lab="' + esc(lab) + '" title="Sterge">&times;</button>';
     html += '</div></div>';
@@ -1332,7 +1343,8 @@ function renderBrowseTable(results) {
   h += '<th data-col="Denumire">Analiza</th>';
   h += '<th data-col="Categorie">Categorie</th>';
   h += '<th data-col="Timp">Timp</th>';
-  h += '<th data-col="Pret" class="price-col">Pret</th>';
+  h += '<th data-col="Pret" class="price-col">Pret (cu disc.)</th>';
+  h += '<th class="price-col price-col-cc">Pret Clinica Central</th>';
   h += '</tr></thead><tbody>';
 
   for (var i = 0; i < rows.length; i++) {
@@ -1350,9 +1362,18 @@ function renderBrowseTable(results) {
     h += '<td data-label="Analiza" class="den-cell">' + denHtml + '</td>';
     h += '<td data-label="Categorie">' + esc(r.Categorie !== "N/A" ? r.Categorie : "") + '</td>';
     h += '<td data-label="Timp">' + esc(r.Timp !== "N/A" ? r.Timp : "") + '</td>';
-    h += '<td data-label="Pret" class="price-cell' + (isBest ? " cheapest" : "") + '">';
+    h += '<td data-label="Pret (cu disc.)" class="price-cell' + (isBest ? " cheapest" : "") + '">';
     h += '<span class="price-final">' + fp.toFixed(0) + ' RON</span>';
     if (discPct(r.Laborator) > 0) h += '<span class="price-orig">' + r.Pret.toFixed(0) + ' RON</span>';
+    h += '</td>';
+    // Pret Clinica Central
+    var ccp = getCCPrice(r.Denumire);
+    h += '<td data-label="Pret Clinica Central" class="price-cell-cc">';
+    if (ccp !== null) {
+      h += '<span class="price-cc">' + ccp.toFixed(0) + ' RON</span>';
+    } else {
+      h += '<span class="price-cc-na">—</span>';
+    }
     h += '</td></tr>';
   }
   h += '</tbody></table>';
@@ -2019,7 +2040,13 @@ function renderIstoric() {
     if (c.user_email) html += '<span class="istoric-user">' + esc(c.user_email) + '</span>';
     html += '</div></div>';
     html += '<div class="istoric-row-price"><strong>' + Math.round(c.total_final_ron) + '</strong> RON</div>';
-    html += '<button class="istoric-row-btn" data-id="' + esc(c.id) + '">Detalii</button>';
+    html += '<div class="istoric-row-actions">';
+    html += '<button class="istoric-row-btn" data-act="detalii" data-id="' + esc(c.id) + '">Detalii</button>';
+    html += '<button class="istoric-row-btn istoric-btn-xlsx" data-act="xlsx" data-id="' + esc(c.id) + '">Excel</button>';
+    html += '<button class="istoric-row-btn istoric-btn-json" data-act="json" data-id="' + esc(c.id) + '">JSON</button>';
+    html += '<button class="istoric-row-btn istoric-btn-new" data-act="noua" data-id="' + esc(c.id) + '">Cerere noua</button>';
+    html += '<button class="istoric-row-btn istoric-btn-same" data-act="same" data-id="' + esc(c.id) + '">Aceeasi cerere</button>';
+    html += '</div>';
     html += '</div>';
   }
   listEl.innerHTML = html;
@@ -2028,9 +2055,164 @@ function renderIstoric() {
   for (var i = 0; i < btns.length; i++) {
     (function(btn) {
       btn.addEventListener("click", function() {
-        showIstoricDetail(btn.getAttribute("data-id"));
+        var id = btn.getAttribute("data-id");
+        var act = btn.getAttribute("data-act");
+        if (act === "detalii") showIstoricDetail(id);
+        else if (act === "xlsx") exportIstoricXlsx(id);
+        else if (act === "json") exportIstoricJson(id);
+        else if (act === "noua") cerereNouaDinIstoric(id);
+        else if (act === "same") aceeasiCerereDinIstoric(id);
       });
     })(btns[i]);
+  }
+}
+
+// ─── Helper: rebuild a report-like object from a saved cerere ───
+function rebuildReportFromCerere(c) {
+  // c.items is the JSONB array saved at process time
+  var items = (c.items || []).map(function(it) {
+    return {
+      displayName: it.denumire,
+      offer: {
+        Laborator: it.laborator,
+        Denumire: it.denumire,
+        Pret: it.pret_lista,
+        Timp: it.timp || "N/A",
+        Categorie: it.categorie || "N/A"
+      },
+      finalPrice: it.pret_final,
+      discount: it.discount
+    };
+  });
+  // Group by lab
+  var groupsMap = {};
+  for (var i = 0; i < items.length; i++) {
+    var lab = items[i].offer.Laborator;
+    if (!groupsMap[lab]) groupsMap[lab] = { lab: lab, items: [], total: 0, listTotal: 0 };
+    groupsMap[lab].items.push(items[i]);
+    groupsMap[lab].total += items[i].finalPrice;
+    groupsMap[lab].listTotal += items[i].offer.Pret;
+  }
+  var groups = Object.keys(groupsMap).map(function(k){ return groupsMap[k]; });
+  return {
+    items: items,
+    groups: groups,
+    grandTotal: c.total_final_ron,
+    grandListTotal: c.total_lista_ron
+  };
+}
+
+// ─── Export Excel from istoric ───
+function exportIstoricXlsx(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  // Temporarily set cartState patient fields so export header is correct
+  var saved = {
+    prenume: cartState.prenume, nume: cartState.nume, cnp: cartState.cnp,
+    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar
+  };
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.cnp = c.cnp_pacient || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  var r = rebuildReportFromCerere(c);
+  exportReportXlsx(r);
+  // Restore
+  cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
+  cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
+}
+
+// ─── Export JSON from istoric ───
+function exportIstoricJson(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  var saved = {
+    prenume: cartState.prenume, nume: cartState.nume, cnp: cartState.cnp,
+    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar
+  };
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.cnp = c.cnp_pacient || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  var r = rebuildReportFromCerere(c);
+  exportReportJson(r);
+  cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
+  cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
+}
+
+// ─── Cerere noua din istoric: pastreaza DOAR pacientul ───
+function cerereNouaDinIstoric(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  // Fill patient fields, empty cart
+  prenumeInput.value = c.pacient_prenume || "";
+  numeInput.value = c.pacient_nume || "";
+  cnpInput.value = c.cnp_pacient || "";
+  emailInput.value = c.pacient_email || "";
+  telefonPrefixSelect.value = c.pacient_telefon_prefix || "+40";
+  telefonNumarInput.value = c.pacient_telefon_numar || "";
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  cartState.cart = [];
+  updateNumeField(prenumeInput, "prenume");
+  updateNumeField(numeInput, "nume");
+  updateCnpUi();
+  renderCart();
+  switchView("cart");
+}
+
+// ─── Aceeasi cerere din istoric: pacient + analize (preturi/data se recalculeaza) ───
+function aceeasiCerereDinIstoric(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  // Fill patient
+  prenumeInput.value = c.pacient_prenume || "";
+  numeInput.value = c.pacient_nume || "";
+  cnpInput.value = c.cnp_pacient || "";
+  emailInput.value = c.pacient_email || "";
+  telefonPrefixSelect.value = c.pacient_telefon_prefix || "+40";
+  telefonNumarInput.value = c.pacient_telefon_numar || "";
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  // Rebuild cart from saved items — re-resolve current best offer for each analiza
+  cartState.cart = [];
+  var notFound = [];
+  var items = c.items || [];
+  for (var i = 0; i < items.length; i++) {
+    var den = items[i].denumire;
+    var key = normName(den);
+    var entry = ANALIZE_INDEX[key];
+    if (entry) {
+      // Pick the cheapest offer now (prices may have changed since the original)
+      var best = cheapestOffer(entry);
+      if (best.offer) {
+        addToCart(key, best.offer.Laborator);
+      } else {
+        notFound.push(den);
+      }
+    } else {
+      notFound.push(den);
+    }
+  }
+  updateNumeField(prenumeInput, "prenume");
+  updateNumeField(numeInput, "nume");
+  updateCnpUi();
+  renderCart();
+  switchView("cart");
+  if (notFound.length) {
+    setTimeout(function() {
+      alert("Atentie: " + notFound.length + " analize nu au mai fost gasite in catalogul curent si nu au fost adaugate:\n\n" + notFound.join("\n"));
+    }, 300);
   }
 }
 
