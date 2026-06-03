@@ -2335,7 +2335,11 @@ var borderouState = {
 };
 
 // Labs with PDF templates currently implemented
-var BORDEROU_TEMPLATES = ["Derzelius", "Clinica Sante", "Poliana"];
+// Derzelius and Poliana have their own dedicated templates.
+// Sante template is reused (with lab name swapped) for Clinica Sante, Binisan, Solomed, Medilab
+// until proper templates are provided.
+var BORDEROU_TEMPLATES = ["Derzelius", "Clinica Sante", "Poliana", "Binisan", "Solomed", "Medilab"];
+var SANTE_TEMPLATE_LABS = ["Clinica Sante", "Binisan", "Solomed", "Medilab"];
 
 // Classify an analiza into a borderou column key
 // Returns one of: HLG, COAG, VSH, BCH, URINA, FECALE, TEXUDA, ALTELE
@@ -2559,8 +2563,9 @@ function generateBorderouPDF() {
     return;
   }
   if (lab === "Derzelius") generatePDFDerzelius(rows);
-  else if (lab === "Clinica Sante") generatePDFSante(rows);
   else if (lab === "Poliana") generatePDFPoliana(rows);
+  else if (SANTE_TEMPLATE_LABS.indexOf(lab) !== -1) generatePDFSante(rows, lab);
+  else alert("Template indisponibil pentru " + lab + ".");
 }
 
 function _dateRO(iso) {
@@ -2649,15 +2654,17 @@ function generatePDFDerzelius(rows) {
   doc.save(filename);
 }
 
-function generatePDFSante(rows) {
+function generatePDFSante(rows, labName) {
   var jsPDF = window.jspdf.jsPDF;
   var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   var dateStr = _dateRO(borderouState.selectedDate);
+  // Default to "Clinica Sante" if not provided (backwards compat)
+  var displayLabName = labName || "Clinica Sante";
 
   // Header
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.text("CLINICA SANTE", 14, 14);
+  doc.text(stripDiacritics(displayLabName).toUpperCase(), 14, 14);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.text("LAM. Pitesti", 14, 19);
@@ -2744,7 +2751,9 @@ function generatePDFSante(rows) {
     });
   }
 
-  var filename = "borderou_ClinicaSante_" + borderouState.selectedDate + ".pdf";
+  // Filename: normalize lab name (no spaces, no diacritics)
+  var safeLabName = stripDiacritics(displayLabName).replace(/\s+/g, "");
+  var filename = "borderou_" + safeLabName + "_" + borderouState.selectedDate + ".pdf";
   doc.save(filename);
 }
 
