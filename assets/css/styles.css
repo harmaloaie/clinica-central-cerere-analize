@@ -778,7 +778,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Limit height — if too many tube types, scroll inside */
+  max-height: 220px;
+  overflow-y: auto;
+  /* Subtle scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(184,151,58,0.4) transparent;
+  /* Tiny inner padding so scrollbar doesn't overlap text */
+  padding-right: 4px;
 }
+.eprubete-list::-webkit-scrollbar { width: 6px; }
+.eprubete-list::-webkit-scrollbar-thumb { background: rgba(184,151,58,0.4); border-radius: 3px; }
+.eprubete-list::-webkit-scrollbar-track { background: transparent; }
 .eprubete-item {
   display: flex;
   align-items: center;
@@ -819,6 +830,7 @@ body {
 }
 .eprubete-summary-report .eprubete-label { color: rgba(15,17,23,0.6); margin-bottom: 12px; }
 .eprubete-summary-report .eprubete-item { color: var(--ink); font-size: 14px; }
+.eprubete-summary-report .eprubete-list { max-height: none; overflow: visible; padding-right: 0; }
 .eprubete-summary-report .eprubete-text small { color: rgba(15,17,23,0.5); }
 
 .cart-totals {
