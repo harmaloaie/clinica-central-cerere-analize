@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0f1117">
+<title>Scaneaza — Clinica Central</title>
+<link rel="icon" type="image/jpeg" href="assets/img/logo.jpg">
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script src="assets/shared/config.js"></script>
+<script src="assets/shared/supabase-client.js"></script>
+
+<style>
+  :root {
+    --ink: #0f1117;
+    --cream: #f8f6f1;
+    --gold: #b8973a;
+    --gold-dark: #9c7e2d;
+    --danger: #dc2626;
+    --success: #16a34a;
+    --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--ink);
+    color: var(--cream);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    background: var(--ink);
+    border-bottom: 1px solid rgba(184, 151, 58, 0.3);
+    padding: 16px;
+    text-align: center;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 18px;
+    color: var(--gold);
+    letter-spacing: 1px;
+  }
+  header .sub {
+    font-size: 11px;
+    color: rgba(248, 246, 241, 0.6);
+    margin-top: 4px;
+  }
+  header .sub strong { color: var(--cream); }
+
+  .container {
+    flex: 1;
+    padding: 24px 16px;
+    max-width: 480px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  /* ─── Loading / Error states ─── */
+  .state-loading,
+  .state-error,
+  .state-success {
+    text-align: center;
+    padding: 40px 16px;
+  }
+  .state-error {
+    background: rgba(220, 38, 38, 0.1);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    border-radius: 12px;
+    color: #fecaca;
+  }
+  .state-error h2 { margin: 0 0 8px; color: #fecaca; }
+  .state-success {
+    background: rgba(22, 163, 74, 0.1);
+    border: 1px solid rgba(22, 163, 74, 0.3);
+    border-radius: 12px;
+    color: #bbf7d0;
+  }
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(184, 151, 58, 0.2);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 16px;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ─── Main menu (2 big buttons) ─── */
+  .menu {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .menu-btn {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    background: linear-gradient(135deg, #1e2a3a 0%, #2d3e5b 100%);
+    color: var(--cream);
+    border: 1px solid rgba(184, 151, 58, 0.3);
+    border-radius: 16px;
+    padding: 24px 20px;
+    font-size: 18px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s;
+    font-family: inherit;
+  }
+  .menu-btn:active {
+    transform: scale(0.98);
+    border-color: var(--gold);
+  }
+  .menu-btn .icon {
+    font-size: 36px;
+    width: 56px;
+    text-align: center;
+  }
+  .menu-btn .title {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .menu-btn .sub {
+    font-size: 12px;
+    font-weight: 400;
+    color: rgba(248, 246, 241, 0.6);
+  }
+  .menu-btn.primary {
+    background: var(--gold);
+    color: var(--ink);
+    border-color: var(--gold-dark);
+  }
+  .menu-btn.primary .sub { color: rgba(15, 17, 23, 0.7); }
+
+  /* ─── Scanner ─── */
+  .scanner-area {
+    text-align: center;
+  }
+  #qr-reader {
+    width: 100%;
+    max-width: 360px;
+    margin: 0 auto 16px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  #qr-reader video {
+    border-radius: 12px;
+  }
+  .scan-instruction {
+    text-align: center;
+    font-size: 14px;
+    color: rgba(248, 246, 241, 0.8);
+    margin: 16px 0;
+    padding: 12px;
+    background: rgba(184, 151, 58, 0.08);
+    border-radius: 8px;
+  }
+  .back-btn {
+    width: 100%;
+    background: transparent;
+    color: var(--cream);
+    border: 1px solid rgba(248, 246, 241, 0.3);
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 16px;
+    font-family: inherit;
+  }
+  .back-btn:active {
+    background: rgba(248, 246, 241, 0.1);
+  }
+
+  /* ─── Result preview after scan ─── */
+  .result-card {
+    background: rgba(248, 246, 241, 0.05);
+    border: 1px solid rgba(184, 151, 58, 0.3);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .result-card h3 {
+    margin: 0 0 12px;
+    color: var(--gold);
+    font-size: 14px;
+    letter-spacing: 1px;
+  }
+  .result-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(248, 246, 241, 0.08);
+    font-size: 14px;
+  }
+  .result-row:last-child { border-bottom: none; }
+  .result-row .label {
+    color: rgba(248, 246, 241, 0.5);
+    font-size: 12px;
+  }
+  .result-row .val {
+    color: var(--cream);
+    font-weight: 600;
+  }
+  .result-row .val.discount {
+    color: var(--gold);
+    font-weight: 700;
+  }
+
+  .footer-info {
+    text-align: center;
+    padding: 16px;
+    font-size: 11px;
+    color: rgba(248, 246, 241, 0.4);
+  }
+
+  /* Connected indicator */
+  .conn-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: rgba(248, 246, 241, 0.6);
+  }
+  .conn-status .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4ade80;
+    animation: pulse-conn 2s ease-in-out infinite;
+  }
+  @keyframes pulse-conn {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>CLINICA CENTRAL</h1>
+  <div class="sub" id="hdrSub">Se conecteaza la laptop...</div>
+</header>
+
+<div class="container">
+
+  <!-- State: Loading (validating session) -->
+  <div class="state-loading" id="stateLoading">
+    <div class="spinner"></div>
+    <div>Verifica sesiunea...</div>
+  </div>
+
+  <!-- State: Error -->
+  <div class="state-error" id="stateError" style="display:none">
+    <h2 id="errorTitle">Eroare</h2>
+    <p id="errorText"></p>
+  </div>
+
+  <!-- Main menu (2 buttons) -->
+  <div id="stateMenu" style="display:none">
+    <div class="menu">
+      <button class="menu-btn primary" id="btnScanCard">
+        <div class="icon">📱</div>
+        <div>
+          <div class="title">Card Paun (QR)</div>
+          <div class="sub">Scaneaza codul QR de pe cardul clientului</div>
+        </div>
+      </button>
+      <button class="menu-btn" id="btnScanBilet">
+        <div class="icon">📄</div>
+        <div>
+          <div class="title">Bilet analize (foto)</div>
+          <div class="sub">Fotografiaza biletul de trimitere CAS</div>
+        </div>
+      </button>
+    </div>
+  </div>
+
+  <!-- Scanner view -->
+  <div id="stateScanner" style="display:none">
+    <div class="scanner-area">
+      <div id="qr-reader"></div>
+      <div class="scan-instruction" id="scanInstruction">
+        Indrepta camera spre QR-ul de pe cardul Paun
+      </div>
+      <button class="back-btn" id="btnBackToMenu">Inapoi la meniu</button>
+    </div>
+  </div>
+
+  <!-- Bilet (Etapa 2 - placeholder) -->
+  <div id="stateBilet" style="display:none">
+    <div class="state-error" style="background:rgba(245,158,11,0.1);border-color:rgba(245,158,11,0.3);color:#fde68a">
+      <h2 style="color:#fde68a">In curs de dezvoltare</h2>
+      <p>Functia de scanare bilete cu foto OCR va fi disponibila in curand. Momentan poti folosi doar scanarea QR pentru cardul Paun.</p>
+    </div>
+    <button class="back-btn" id="btnBackToMenu2">Inapoi la meniu</button>
+  </div>
+
+  <!-- Result after successful scan -->
+  <div id="stateResult" style="display:none">
+    <div class="result-card" id="resultCard"></div>
+    <button class="menu-btn primary" id="btnScanAnother" style="margin-top:8px">
+      <div class="icon">🔄</div>
+      <div>
+        <div class="title">Scaneaza alt card</div>
+        <div class="sub">Datele au fost trimise la laptop</div>
+      </div>
+    </button>
+  </div>
+</div>
+
+<div class="footer-info">
+  <div class="conn-status" id="connStatus" style="display:none">
+    <span class="dot"></span>
+    <span>Conectat cu laptopul</span>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// SCAN PAGE — Phone side
+// ════════════════════════════════════════════════════════════════
+
+var params = new URLSearchParams(window.location.search);
+var sessionId = params.get("s");
+
+// State elements
+var stateLoading = document.getElementById("stateLoading");
+var stateError = document.getElementById("stateError");
+var stateMenu = document.getElementById("stateMenu");
+var stateScanner = document.getElementById("stateScanner");
+var stateBilet = document.getElementById("stateBilet");
+var stateResult = document.getElementById("stateResult");
+var connStatus = document.getElementById("connStatus");
+
+function showState(name) {
+  stateLoading.style.display = "none";
+  stateError.style.display = "none";
+  stateMenu.style.display = "none";
+  stateScanner.style.display = "none";
+  stateBilet.style.display = "none";
+  stateResult.style.display = "none";
+  var el = document.getElementById("state" + name.charAt(0).toUpperCase() + name.slice(1));
+  if (el) el.style.display = "block";
+}
+
+function showError(title, text) {
+  document.getElementById("errorTitle").textContent = title;
+  document.getElementById("errorText").textContent = text;
+  showState("error");
+}
+
+// ─── Step 1: Validate session ───
+async function validateSession() {
+  if (!sessionId) {
+    showError("Sesiune lipsa", "URL-ul nu contine o sesiune valida. Cere laptopului sa genereze un nou cod QR.");
+    return;
+  }
+  if (!window.sb) {
+    showError("Eroare configurare", "Aplicatia nu s-a incarcat corect. Reincarca pagina.");
+    return;
+  }
+  try {
+    var res = await window.sb.from("cc_pairing_sessions")
+      .select("session_id, user_email, expires_at")
+      .eq("session_id", sessionId)
+      .maybeSingle();
+
+    if (res.error) {
+      console.error("[scan] session lookup error:", res.error);
+      showError("Eroare conexiune", "Nu pot verifica sesiunea: " + (res.error.message || "necunoscuta"));
+      return;
+    }
+    if (!res.data) {
+      showError("Sesiune invalida sau expirata", "Cere laptopului sa genereze un nou cod QR.");
+      return;
+    }
+    var expires = new Date(res.data.expires_at);
+    if (expires < new Date()) {
+      showError("Sesiune expirata", "Sesiunea a expirat. Cere laptopului sa genereze un nou cod QR.");
+      return;
+    }
+
+    // Mark session as phone-connected and notify laptop via broadcast
+    await window.sb.from("cc_pairing_sessions").update({
+      phone_connected: true,
+      last_seen_at: new Date().toISOString()
+    }).eq("session_id", sessionId);
+
+    // Open broadcast channel
+    pairChannel = window.sb.channel("pairing:" + sessionId, {
+      config: { broadcast: { ack: false, self: false } }
+    });
+    pairChannel.subscribe(function(status) {
+      console.log("[scan] channel status:", status);
+      if (status === "SUBSCRIBED") {
+        pairChannel.send({ type: "broadcast", event: "phone_connected", payload: { ts: Date.now() } });
+      }
+    });
+
+    document.getElementById("hdrSub").innerHTML = 'Conectat cu <strong>' + esc(res.data.user_email || "laptop") + '</strong>';
+    connStatus.style.display = "inline-flex";
+    showState("menu");
+  } catch (e) {
+    console.error("[scan] validate exception:", e);
+    showError("Eroare", e.message || "Eroare necunoscuta");
+  }
+}
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+var pairChannel = null;
+var qrScanner = null;
+
+// ─── Menu buttons ───
+document.getElementById("btnScanCard").addEventListener("click", function() {
+  showState("scanner");
+  startQrScanner();
+});
+document.getElementById("btnScanBilet").addEventListener("click", function() {
+  showState("bilet");
+});
+document.getElementById("btnBackToMenu").addEventListener("click", backToMenu);
+document.getElementById("btnBackToMenu2").addEventListener("click", backToMenu);
+document.getElementById("btnScanAnother").addEventListener("click", backToMenu);
+
+function backToMenu() {
+  stopQrScanner();
+  showState("menu");
+}
+
+// ─── QR scanner ───
+function startQrScanner() {
+  if (qrScanner) return;
+  try {
+    qrScanner = new Html5Qrcode("qr-reader");
+    var config = { fps: 10, qrbox: { width: 240, height: 240 }, aspectRatio: 1.0 };
+    qrScanner.start(
+      { facingMode: "environment" },
+      config,
+      onQrSuccess,
+      function() { /* scan failures - silent */ }
+    ).catch(function(err) {
+      console.error("[scan] camera failed:", err);
+      document.getElementById("scanInstruction").innerHTML =
+        '<strong style="color:#fca5a5">Nu pot porni camera.</strong><br>' +
+        '<small>Asigura-te ca ai dat permisiune pentru camera in browser.</small>';
+    });
+  } catch (e) {
+    console.error("[scan] scanner init error:", e);
+  }
+}
+function stopQrScanner() {
+  if (qrScanner) {
+    qrScanner.stop().then(function() {
+      qrScanner.clear();
+      qrScanner = null;
+    }).catch(function() {
+      qrScanner = null;
+    });
+  }
+}
+
+async function onQrSuccess(decodedText) {
+  console.log("[scan] decoded:", decodedText);
+  stopQrScanner();
+
+  // Extract Paun code (format: CC-XXXX-XXXX, possibly embedded in URL)
+  var codMatch = decodedText.match(/CC-[A-Z0-9]{4}-[A-Z0-9]{4}/i);
+  if (!codMatch) {
+    showResult({
+      error: true,
+      message: "QR-ul nu contine un cod Paun valid",
+      raw: decodedText
+    });
+    return;
+  }
+  var codPaun = codMatch[0].toUpperCase();
+
+  // Look up patient in pacienti table
+  try {
+    var res = await window.sb.from("pacienti")
+      .select("cod_card, nume, prenume, cnp, email, telefon, discount_pct, activ")
+      .eq("cod_card", codPaun)
+      .eq("activ", true)
+      .maybeSingle();
+
+    if (res.error) {
+      console.error("[scan] pacienti lookup error:", res.error);
+      // Send to laptop anyway with just the code
+      var payload = { codPaun: codPaun, error: res.error.message };
+      sendToLaptop("scan_patient", payload);
+      showResult({ found: false, codPaun: codPaun });
+      return;
+    }
+
+    if (!res.data) {
+      // Patient not in DB - send code only to laptop, laptop will show empty form with code prefilled
+      sendToLaptop("scan_patient", { codPaun: codPaun });
+      showResult({ found: false, codPaun: codPaun });
+      return;
+    }
+
+    // Found patient - send full data to laptop
+    var patient = res.data;
+    var payload = {
+      codPaun: codPaun,
+      prenume: patient.prenume || "",
+      nume: patient.nume || "",
+      cnp: patient.cnp || "",
+      email: patient.email || "",
+      telefon: patient.telefon || "",
+      discountPct: typeof patient.discount_pct === "number" ? patient.discount_pct : 0
+    };
+    sendToLaptop("scan_patient", payload);
+    showResult({ found: true, codPaun: codPaun, patient: patient });
+  } catch (e) {
+    console.error("[scan] exception:", e);
+    showResult({ error: true, message: e.message || "Eroare necunoscuta", raw: decodedText });
+  }
+}
+
+function sendToLaptop(event, payload) {
+  if (!pairChannel) {
+    console.warn("[scan] no channel to send on");
+    return;
+  }
+  pairChannel.send({ type: "broadcast", event: event, payload: payload });
+}
+
+function showResult(info) {
+  var card = document.getElementById("resultCard");
+  var html = "";
+  if (info.error) {
+    html += '<h3 style="color:#fca5a5">Eroare</h3>';
+    html += '<div style="color:#fecaca;font-size:14px">' + esc(info.message) + '</div>';
+    if (info.raw) {
+      html += '<div style="margin-top:12px;font-size:11px;color:rgba(248,246,241,0.4);word-break:break-all">' + esc(info.raw) + '</div>';
+    }
+  } else if (info.found) {
+    var p = info.patient;
+    var fullName = [p.prenume, p.nume].filter(Boolean).join(" ");
+    html += '<h3>CLIENT IDENTIFICAT</h3>';
+    html += '<div class="result-row"><span class="label">Nume</span><span class="val">' + esc(fullName) + '</span></div>';
+    if (p.cnp) html += '<div class="result-row"><span class="label">CNP</span><span class="val">' + esc(p.cnp) + '</span></div>';
+    if (p.email) html += '<div class="result-row"><span class="label">Email</span><span class="val">' + esc(p.email) + '</span></div>';
+    if (p.telefon) html += '<div class="result-row"><span class="label">Telefon</span><span class="val">' + esc(p.telefon) + '</span></div>';
+    if (typeof p.discount_pct === "number" && p.discount_pct > 0) {
+      html += '<div class="result-row"><span class="label">Discount Paun</span><span class="val discount">' + p.discount_pct + '%</span></div>';
+    }
+    html += '<div class="result-row"><span class="label">Cod card</span><span class="val">' + esc(info.codPaun) + '</span></div>';
+    html += '<div style="margin-top:16px;padding:12px;background:rgba(22,163,74,0.1);border-radius:8px;font-size:13px;color:#bbf7d0;text-align:center">✓ Date trimise la laptop</div>';
+  } else {
+    html += '<h3 style="color:#fde68a">CLIENT NEINREGISTRAT</h3>';
+    html += '<div class="result-row"><span class="label">Cod card</span><span class="val">' + esc(info.codPaun) + '</span></div>';
+    html += '<div style="margin-top:16px;padding:12px;background:rgba(245,158,11,0.1);border-radius:8px;font-size:13px;color:#fde68a">Clientul nu e in baza de date Paun. Receptionera va completa manual datele pe laptop.</div>';
+  }
+  card.innerHTML = html;
+  showState("result");
+}
+
+// ─── Init ───
+validateSession();
+</script>
+
+</body>
+</html>
