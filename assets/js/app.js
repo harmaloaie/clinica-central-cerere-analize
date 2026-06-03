@@ -1166,20 +1166,16 @@ function exportReportPdf(r) {
     y += lines.length * fontSize * 0.4 + spacing;
   }
 
-  // ─── Header / Antet clinica ───
-  doc.setFillColor(15, 17, 23);
-  doc.rect(0, 0, pageWidth, 26, "F");
-
-  // Logo in top-left corner (white background block for visibility on dark header)
+  // ─── Header: only a small black square behind the logo, rest stays clean white ───
   var logo = getLogoForPdf();
-  var logoBoxSize = 18;       // square box on page
+  var logoBoxSize = 20;       // square box on page (slightly bigger now that it's standalone)
   var titleX = margin;        // default: where title starts if no logo
   if (logo) {
-    // White rounded background so logo (which has white bg) blends nicely on dark header
-    doc.setFillColor(255, 255, 255);
-    doc.roundedRect(margin, 4, logoBoxSize, logoBoxSize, 1.5, 1.5, "F");
+    // Small black rounded square ONLY behind logo (saves ink, makes logo pop)
+    doc.setFillColor(15, 17, 23);
+    doc.roundedRect(margin, margin - 2, logoBoxSize, logoBoxSize, 2, 2, "F");
     // Compute fit-inside dimensions preserving aspect ratio
-    var pad = 1.5;
+    var pad = 2;
     var maxW = logoBoxSize - 2 * pad;
     var maxH = logoBoxSize - 2 * pad;
     var ratio = logo.w / logo.h;
@@ -1190,29 +1186,36 @@ function exportReportPdf(r) {
       dh = maxH; dw = maxH * ratio;
     }
     var dx = margin + (logoBoxSize - dw) / 2;
-    var dy = 4 + (logoBoxSize - dh) / 2;
+    var dy = (margin - 2) + (logoBoxSize - dh) / 2;
     try {
       doc.addImage(logo.dataUrl, "JPEG", dx, dy, dw, dh);
     } catch (e) { /* silent fail */ }
-    titleX = margin + logoBoxSize + 5;
+    titleX = margin + logoBoxSize + 6;
   }
 
-  doc.setFontSize(15);
+  // Title text in black/gold next to logo (on white page background)
+  doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(184, 151, 58); // gold
-  doc.text("CLINICA CENTRAL", titleX, 12);
-  doc.setFontSize(9);
+  doc.setTextColor(15, 17, 23);  // dark ink (text only, minimal ink)
+  doc.text("CLINICA CENTRAL", titleX, margin + 5);
+  doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
-  doc.setTextColor(248, 246, 241); // cream
-  doc.text("Cerere analize", titleX, 17);
-  // Top-right meta
-  doc.setFontSize(8);
-  doc.setTextColor(248, 246, 241);
-  var now = new Date();
-  doc.text("Generat: " + now.toLocaleString("ro-RO"), pageWidth - margin, 12, { align: "right" });
-  doc.text("Pitesti, Romania", pageWidth - margin, 17, { align: "right" });
+  doc.setTextColor(184, 151, 58); // gold subtitle
+  doc.text("Cerere analize", titleX, margin + 11);
 
-  y = 34;
+  // Top-right meta (black text on white)
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  var now = new Date();
+  doc.text("Generat: " + now.toLocaleString("ro-RO"), pageWidth - margin, margin + 5, { align: "right" });
+  doc.text("Pitesti, Romania", pageWidth - margin, margin + 10, { align: "right" });
+
+  // Thin gold rule under the entire header area
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.4);
+  doc.line(margin, margin + 20, pageWidth - margin, margin + 20);
+
+  y = margin + 26;
 
   // ─── Pacient ───
   var fullName = [cartState.prenume.trim(), cartState.nume.trim()].filter(Boolean).join(" ");
