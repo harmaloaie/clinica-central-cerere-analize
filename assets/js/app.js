@@ -76,6 +76,16 @@ function getCCPrice(denumire) {
   var p = PRETURI_CC[normName(denumire)];
   return (typeof p === "number") ? p : null;
 }
+// Effective price = pret CC if available, else lab discounted price + 5% markup.
+// Used for the FINAL report (modal + Excel + JSON + Istoric) so we charge
+// our own catalog price; lab pricing stays visible only in cart for comparison.
+function effectivePrice(denumire, laborator, pretLista) {
+  var cc = getCCPrice(denumire);
+  if (cc !== null) return { price: cc, source: "cc" };
+  // Fallback: discounted lab price + 5%
+  var discounted = finalPrice(pretLista, laborator);
+  return { price: Math.round(discounted * 1.05 * 100) / 100, source: "lab+5%" };
+}
 function fmtRecipient(d) {
   if (!d) return "";
   var parts = [];
@@ -599,7 +609,13 @@ function doCartSearch() {
     html += '</div></div>';
     html += '<div style="display:flex;align-items:center;gap:14px">';
     html += '<div class="suggestion-add-hint">+ Adauga</div>';
+    html += '<div class="suggestion-prices">';
     html += '<div class="suggestion-price">' + fp + '<small>' + (disc > 0 ? "cu " + disc + "% disc" : "RON") + '</small></div>';
+    var ccp = getCCPrice(r.Denumire);
+    if (ccp !== null) {
+      html += '<div class="suggestion-price-cc" title="Pret Clinica Central">' + ccp.toFixed(0) + '<small>CC</small></div>';
+    }
+    html += '</div>';
     html += '</div></div>';
   }
   cartSuggestionsEl.innerHTML = html;
@@ -811,14 +827,19 @@ function buildReport() {
   for (var i = 0; i < cartState.cart.length; i++) {
     var c = cartState.cart[i];
     if (!c.offer) continue;
-    var fp = finalPrice(c.offer.Pret, c.offer.Laborator);
-    grandTotal += fp;
+    // Reference: lab pricing (kept for comparison)
+    var labFinal = finalPrice(c.offer.Pret, c.offer.Laborator);
+    // OFFICIAL price for the report = Clinica Central pricing (CC catalog or lab+5%)
+    var eff = effectivePrice(c.displayName, c.offer.Laborator, c.offer.Pret);
+    grandTotal += eff.price;
     grandListTotal += c.offer.Pret;
     items.push({
       key: c.key,
       displayName: c.displayName,
       offer: c.offer,
-      finalPrice: fp,
+      finalPrice: eff.price,       // CC price (or lab+5% fallback) — used everywhere downstream
+      labFinalPrice: labFinal,     // Kept for reference if needed
+      priceSource: eff.source,     // "cc" or "lab+5%"
       discount: discPct(c.offer.Laborator)
     });
   }
@@ -841,7 +862,7 @@ function openReport() {
 
   var statsHtml = '<div class="report-stat"><span class="report-stat-num">' + r.items.length + '</span><span class="report-stat-label">Analize</span></div>';
   statsHtml += '<div class="report-stat"><span class="report-stat-num">' + r.groups.length + '</span><span class="report-stat-label">Laboratoare</span></div>';
-  statsHtml += '<div class="report-stat"><span class="report-stat-num">' + (r.grandListTotal - r.grandTotal) + '</span><span class="report-stat-label">RON economisiti</span></div>';
+  statsHtml += '<div class="report-stat"><span class="report-stat-num">' + Math.round(r.grandListTotal - r.grandTotal) + '</span><span class="report-stat-label">RON sub pret lista</span></div>';
   document.getElementById("reportStats").innerHTML = statsHtml;
 
   // Patient info header
@@ -921,9 +942,14 @@ function openReport() {
         body += '</div>';
       }
       body += '</div>';
-      body += '<div class="lab-group-item-price">' + it.finalPrice + ' RON';
-      if (it.discount > 0) {
-        body += '<span class="lab-group-item-price-orig">' + it.offer.Pret.toFixed(0) + ' RON</span>';
+      body += '<div class="lab-group-item-price">' + Math.round(it.finalPrice) + ' RON';
+      if (it.priceSource === "lab+5%") {
+        body += '<span class="lab-group-item-price-src" title="Nu exista pret in catalogul Clinica Central; folosit pret laborator cu discount +5%">lab + 5%</span>';
+      } else {
+        body += '<span class="lab-group-item-price-src" title="Pret din catalogul Clinica Central">CC</span>';
+      }
+      if (it.offer.Pret && it.offer.Pret > it.finalPrice) {
+        body += '<span class="lab-group-item-price-orig">' + it.offer.Pret.toFixed(0) + ' RON lista</span>';
       }
       body += '</div></div>';
     }
@@ -1026,19 +1052,19 @@ function exportReportXlsx(r) {
         "Se trimite la": d && d.LaboratorSubcontractant ? d.LaboratorSubcontractant : "",
         "Observatii": d && d.Observatii ? d.Observatii : "",
         "Timp Executie": it.offer.Timp !== "N/A" ? it.offer.Timp : "",
-        "Pret Lista (RON)": it.offer.Pret,
-        "Discount (%)": it.discount,
-        "Pret Final (RON)": it.finalPrice,
-        "Economie (RON)": it.offer.Pret - it.finalPrice
+        "Pret Lista Laborator (RON)": it.offer.Pret,
+        "Pret Final (RON)": Math.round(it.finalPrice * 100) / 100,
+        "Sursa Pret": it.priceSource === "cc" ? "Catalog Clinica Central" : "Laborator cu discount + 5%",
+        "Diferenta fata de Lista (RON)": Math.round((it.offer.Pret - it.finalPrice) * 100) / 100
       });
     }
-    rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": grp.lab + " — Subtotal", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret Lista (RON)": grp.listTotal, "Discount (%)": "", "Pret Final (RON)": grp.total, "Economie (RON)": grp.listTotal - grp.total });
+    rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": grp.lab + " — Subtotal", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret Lista Laborator (RON)": grp.listTotal, "Pret Final (RON)": Math.round(grp.total * 100) / 100, "Sursa Pret": "", "Diferenta fata de Lista (RON)": Math.round((grp.listTotal - grp.total) * 100) / 100 });
     rows.push({});
   }
-  rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": "TOTAL GENERAL", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret Lista (RON)": r.grandListTotal, "Discount (%)": "", "Pret Final (RON)": r.grandTotal, "Economie (RON)": r.grandListTotal - r.grandTotal });
+  rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": "TOTAL GENERAL", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret Lista Laborator (RON)": r.grandListTotal, "Pret Final (RON)": Math.round(r.grandTotal * 100) / 100, "Sursa Pret": "", "Diferenta fata de Lista (RON)": Math.round((r.grandListTotal - r.grandTotal) * 100) / 100 });
 
   var ws = XLSX.utils.json_to_sheet(rows);
-  ws["!cols"] = [{wch:22},{wch:15},{wch:22},{wch:45},{wch:34},{wch:18},{wch:14},{wch:28},{wch:40},{wch:18},{wch:14},{wch:10},{wch:14},{wch:12}];
+  ws["!cols"] = [{wch:22},{wch:15},{wch:22},{wch:45},{wch:34},{wch:18},{wch:14},{wch:28},{wch:40},{wch:18},{wch:18},{wch:14},{wch:24},{wch:18}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Cerere analize");
 
@@ -1111,9 +1137,10 @@ function exportReportJson(r) {
       totalAnalize: r.items.length,
       totalLaboratoare: r.groups.length,
       totalListRON: r.grandListTotal,
-      totalFinalRON: r.grandTotal,
-      economieRON: r.grandListTotal - r.grandTotal,
-      totalEprubete: totalEprubete
+      totalFinalRON: Math.round(r.grandTotal * 100) / 100,
+      diferentaListaRON: Math.round((r.grandListTotal - r.grandTotal) * 100) / 100,
+      totalEprubete: totalEprubete,
+      pretSursa: "Catalog Clinica Central (fallback: laborator cu discount + 5%)"
     },
     eprubete: eprubeteForJson,
     discountsApplied: Object.assign({}, discounts),
@@ -1122,16 +1149,14 @@ function exportReportJson(r) {
         laborator: g.lab,
         numarAnalize: g.items.length,
         subtotalListRON: g.listTotal,
-        subtotalFinalRON: g.total,
-        economieRON: g.listTotal - g.total,
+        subtotalFinalRON: Math.round(g.total * 100) / 100,
         analize: g.items.map(function(it) {
           var d = getDetails(g.lab, it.displayName);
           var entry = {
             denumire: it.displayName,
-            pretLista: it.offer.Pret,
-            pretFinal: it.finalPrice,
-            discountPct: it.discount,
-            economieRON: it.offer.Pret - it.finalPrice,
+            pretListaLaborator: it.offer.Pret,
+            pretFinal: Math.round(it.finalPrice * 100) / 100,
+            sursaPret: it.priceSource === "cc" ? "Catalog Clinica Central" : "Laborator cu discount + 5%",
             timpExecutie: (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : null,
             categorie: (it.offer.Categorie && it.offer.Categorie !== "N/A") ? it.offer.Categorie : null
           };
@@ -1864,7 +1889,8 @@ async function saveCerere(r) {
         denumire: it.displayName,
         laborator: it.offer.Laborator,
         pret_lista: it.offer.Pret,
-        pret_final: it.finalPrice,
+        pret_final: Math.round(it.finalPrice * 100) / 100,
+        pret_sursa: it.priceSource,
         discount: it.discount,
         timp: (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : null,
         categorie: (it.offer.Categorie && it.offer.Categorie !== "N/A") ? it.offer.Categorie : null,
@@ -2083,6 +2109,7 @@ function rebuildReportFromCerere(c) {
         Categorie: it.categorie || "N/A"
       },
       finalPrice: it.pret_final,
+      priceSource: it.pret_sursa || "cc",  // backwards-compatible default
       discount: it.discount
     };
   });
@@ -2244,7 +2271,7 @@ function showIstoricDetail(id) {
   if (c.user_email) {
     metaHtml += '<div class="istoric-detail-meta-row"><span>De catre:</span><strong>' + esc(c.user_email) + '</strong></div>';
   }
-  metaHtml += '<div class="istoric-detail-meta-row"><span>Total:</span><strong>' + Math.round(c.total_final_ron) + ' RON</strong> (economie: ' + Math.round(c.economie_ron) + ' RON)</div>';
+  metaHtml += '<div class="istoric-detail-meta-row"><span>Total:</span><strong>' + Math.round(c.total_final_ron) + ' RON</strong> (lista: ' + Math.round(c.total_lista_ron) + ' RON)</div>';
   meta.innerHTML = metaHtml;
 
   // Body — show groups + items
@@ -2260,7 +2287,13 @@ function showIstoricDetail(id) {
     html += '<ul class="istoric-detail-group-items">';
     for (var i = 0; i < grpItems.length; i++) {
       var it = grpItems[i];
-      html += '<li><span class="den">' + esc(it.denumire) + '</span><span class="prc">' + Math.round(it.pret_final) + ' RON</span></li>';
+      var srcBadge = '';
+      if (it.pret_sursa === "lab+5%") {
+        srcBadge = ' <small style="color:rgba(15,17,23,0.4);font-size:10px">(lab+5%)</small>';
+      } else if (it.pret_sursa === "cc") {
+        srcBadge = ' <small style="color:var(--gold);font-size:10px">(CC)</small>';
+      }
+      html += '<li><span class="den">' + esc(it.denumire) + srcBadge + '</span><span class="prc">' + Math.round(it.pret_final) + ' RON</span></li>';
     }
     html += '</ul></div>';
   }
