@@ -2411,3 +2411,41 @@ footer strong { color: var(--gold); }
     text-align: center;
   }
 }
+
+/* ═══ Pret CC in suggestion dropdown ═══ */
+.suggestion-prices {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.suggestion-price-cc {
+  font-family: 'DM Serif Display', serif;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--gold);
+  text-align: right;
+  line-height: 1;
+  min-width: 50px;
+  white-space: nowrap;
+}
+.suggestion-price-cc small {
+  display: block;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--gold);
+  margin-top: 4px;
+  opacity: 0.85;
+}
+
+/* ═══ Price source badge in report modal item ═══ */
+.lab-group-item-price-src {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--gold);
+  letter-spacing: 1px;
+  margin-top: 2px;
+  opacity: 0.7;
+}
