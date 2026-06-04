@@ -2163,6 +2163,20 @@ document.getElementById("detailsModal").addEventListener("click", function(e) {
 });
 
 // ════════════════════════════════════════════════════════════════
+// EPRUBETE TOGGLE (collapse/expand)
+// ════════════════════════════════════════════════════════════════
+(function() {
+  var eprubeteToggleBtn = document.getElementById("eprubeteToggle");
+  var eprubeteSummaryEl2 = document.getElementById("eprubeteSummary");
+  if (eprubeteToggleBtn && eprubeteSummaryEl2) {
+    eprubeteToggleBtn.addEventListener("click", function() {
+      var collapsed = eprubeteSummaryEl2.classList.toggle("collapsed");
+      eprubeteToggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    });
+  }
+})();
+
+// ════════════════════════════════════════════════════════════════
 // PHONE PAIRING (Etapa 1: QR card Paun scanning)
 // ════════════════════════════════════════════════════════════════
 
