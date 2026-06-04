@@ -1868,8 +1868,8 @@ function showScanError(msg) {
 
 async function extractFromImage(base64Data, mediaType) {
   var prompt = "Analizeaza acest bilet de trimitere medical romanesc (CAS) sau reteta. Extrage:\n\n" +
-    "1. **Numele si prenumele pacientului** — cauta in campul 'Nume si Prenume' sau similar. Pe bilete romanesti de obicei ordinea este NUME PRENUME (familie, apoi prenume). Daca poti distinge clar, separa-le.\n" +
-    "2. **CNP-ul pacientului** (13 cifre) — cauta in campul 'CID/CNP/CE/PASS'\n" +
+    "1. **Numele si prenumele pacientului** - cauta in campul 'Nume si Prenume' sau similar. Pe bilete romanesti de obicei ordinea este NUME PRENUME (familie, apoi prenume). Daca poti distinge clar, separa-le.\n" +
+    "2. **CNP-ul pacientului** (13 cifre) - cauta in campul 'CID/CNP/CE/PASS'\n" +
     "3. **Data nasterii** (format DD.MM.YYYY sau YYYY-MM-DD daca poti distinge)\n" +
     "4. **Telefon** (poate fi format +40 sau 07XX XXX XXX)\n" +
     "5. **Email** (daca apare)\n" +
@@ -1887,34 +1887,45 @@ async function extractFromImage(base64Data, mediaType) {
     "}\n\n" +
     "Daca biletul nu e lizibil sau nu e un bilet medical, returneaza obiect cu toate campurile null si analize: [].";
 
-  var response = await fetch("https://api.anthropic.com/v1/messages", {
+  var apiKey = window.CLINICA_CONFIG && window.CLINICA_CONFIG.GEMINI_API_KEY;
+  if (!apiKey || apiKey === "PUNE_AICI_CHEIA_GEMINI") {
+    throw new Error("Cheia Gemini API nu e configurata. Pune cheia in config.js.");
+  }
+
+  var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey;
+
+  var response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1500,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } },
-            { type: "text", text: prompt }
-          ]
-        }
-      ]
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: mediaType, data: base64Data } },
+          { text: prompt }
+        ]
+      }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 2000,
+        responseMimeType: "application/json"
+      }
     })
   });
 
   if (!response.ok) {
     var errText = await response.text();
-    throw new Error("API a raspuns cu " + response.status + ": " + errText.substring(0, 200));
+    throw new Error("Gemini API a raspuns cu " + response.status + ": " + errText.substring(0, 250));
   }
 
   var result = await response.json();
-  var textBlocks = result.content.filter(function(b){ return b.type === "text"; });
-  if (!textBlocks.length) throw new Error("Raspuns gol de la API");
+  // Gemini response shape: { candidates: [{ content: { parts: [{ text: "..." }] } }] }
+  var candidate = result.candidates && result.candidates[0];
+  if (!candidate) throw new Error("Raspuns gol de la Gemini");
+  var parts = candidate.content && candidate.content.parts;
+  if (!parts || !parts.length) throw new Error("Continut gol de la Gemini");
 
-  var responseText = textBlocks.map(function(b){ return b.text; }).join("\n").trim();
+  var responseText = parts.map(function(p) { return p.text || ""; }).join("\n").trim();
+  // Strip code blocks if Gemini adds them (shouldn't with responseMimeType: application/json)
   responseText = responseText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
 
   var parsed;
