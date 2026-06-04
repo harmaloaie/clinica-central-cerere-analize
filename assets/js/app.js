@@ -1867,76 +1867,40 @@ function showScanError(msg) {
 }
 
 async function extractFromImage(base64Data, mediaType) {
-  var prompt = "Analizeaza acest bilet de trimitere medical romanesc (CAS) sau reteta. Extrage:\n\n" +
-    "1. **Numele si prenumele pacientului** - cauta in campul 'Nume si Prenume' sau similar. Pe bilete romanesti de obicei ordinea este NUME PRENUME (familie, apoi prenume). Daca poti distinge clar, separa-le.\n" +
-    "2. **CNP-ul pacientului** (13 cifre) - cauta in campul 'CID/CNP/CE/PASS'\n" +
-    "3. **Data nasterii** (format DD.MM.YYYY sau YYYY-MM-DD daca poti distinge)\n" +
-    "4. **Telefon** (poate fi format +40 sau 07XX XXX XXX)\n" +
-    "5. **Email** (daca apare)\n" +
-    "6. **Lista analizelor medicale** recomandate (coloana 'Investigatii recomandate' sau lista). Pentru fiecare analiza, returneaza EXACT textul asa cum e scris pe bilet (chiar daca are typo-uri sau abrevieri).\n\n" +
-    "Daca un camp lipseste sau nu poti citi cu certitudine, lasa pe null.\n\n" +
-    "Raspunde DOAR cu JSON valid, fara alte comentarii, fara code blocks. Format:\n" +
-    "{\n" +
-    '  "nume": "string sau null",\n' +
-    '  "prenume": "string sau null",\n' +
-    '  "cnp": "string 13 cifre sau null",\n' +
-    '  "dataNasterii": "DD.MM.YYYY sau null",\n' +
-    '  "telefon": "string sau null",\n' +
-    '  "email": "string sau null",\n' +
-    '  "analize": ["denumire analiza 1", "denumire analiza 2", ...]\n' +
-    "}\n\n" +
-    "Daca biletul nu e lizibil sau nu e un bilet medical, returneaza obiect cu toate campurile null si analize: [].";
-
-  var apiKey = window.CLINICA_CONFIG && window.CLINICA_CONFIG.GEMINI_API_KEY;
-  if (!apiKey || apiKey === "PUNE_AICI_CHEIA_GEMINI") {
-    throw new Error("Cheia Gemini API nu e configurata. Pune cheia in config.js.");
+  // Call Supabase Edge Function 'ocr-bilet' which proxies to Gemini.
+  // Gemini API key is stored as a Supabase Secret, NOT in the browser.
+  if (!window.sb || !window.sb.functions) {
+    throw new Error("Supabase client nu e initializat");
   }
 
-  var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey;
-
-  var response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { inline_data: { mime_type: mediaType, data: base64Data } },
-          { text: prompt }
-        ]
-      }],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 2000,
-        responseMimeType: "application/json"
-      }
-    })
+  var res = await window.sb.functions.invoke("ocr-bilet", {
+    body: {
+      imageBase64: base64Data,
+      mediaType: mediaType || "image/jpeg"
+    }
   });
 
-  if (!response.ok) {
-    var errText = await response.text();
-    throw new Error("Gemini API a raspuns cu " + response.status + ": " + errText.substring(0, 250));
+  if (res.error) {
+    var msg = res.error.message || String(res.error);
+    // Try to extract the inner error from the Edge Function response
+    if (res.error.context && typeof res.error.context.text === "function") {
+      try {
+        var errText = await res.error.context.text();
+        msg = errText.substring(0, 250);
+      } catch (e) {}
+    }
+    throw new Error("Edge Function: " + msg);
   }
 
-  var result = await response.json();
-  // Gemini response shape: { candidates: [{ content: { parts: [{ text: "..." }] } }] }
-  var candidate = result.candidates && result.candidates[0];
-  if (!candidate) throw new Error("Raspuns gol de la Gemini");
-  var parts = candidate.content && candidate.content.parts;
-  if (!parts || !parts.length) throw new Error("Continut gol de la Gemini");
-
-  var responseText = parts.map(function(p) { return p.text || ""; }).join("\n").trim();
-  // Strip code blocks if Gemini adds them (shouldn't with responseMimeType: application/json)
-  responseText = responseText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-
-  var parsed;
-  try {
-    parsed = JSON.parse(responseText);
-  } catch (e) {
-    throw new Error("Nu pot parsa raspunsul AI: " + responseText.substring(0, 150));
+  var parsed = res.data;
+  if (!parsed) {
+    throw new Error("Raspuns gol de la Edge Function");
   }
-
+  if (parsed.error) {
+    throw new Error(parsed.error);
+  }
   if (!parsed.analize || !Array.isArray(parsed.analize)) {
-    throw new Error("Format neasteptat de raspuns (lipseste lista de analize)");
+    throw new Error("Format neasteptat (lipseste lista de analize)");
   }
 
   return {
