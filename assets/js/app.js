@@ -2203,6 +2203,7 @@ function generatePairSessionId() {
 var pairState = {
   sessionId: null,
   channel: null,
+  channelSessionId: null,
   realtimeSub: null
 };
 
@@ -2226,6 +2227,19 @@ async function openPairModal() {
     return;
   }
   pairModal.classList.add("visible");
+
+  // If we already have an active session + channel, just show the existing QR
+  if (pairState.sessionId && pairState.channel) {
+    console.log("[pair] reusing existing session:", pairState.sessionId);
+    pairLoading.style.display = "none";
+    pairContent.style.display = "block";
+    pairSessionIdEl.textContent = pairState.sessionId;
+    // Regenerate QR display (in case DOM was cleared)
+    var scanUrl = window.location.origin + "/scan.html?s=" + pairState.sessionId;
+    generatePairQR(scanUrl);
+    return;
+  }
+
   pairLoading.style.display = "flex";
   pairContent.style.display = "none";
   pairStatusDot.classList.remove("connected");
@@ -2245,12 +2259,14 @@ async function openPairModal() {
     if (insertRes.error) {
       console.error("[pair] insert failed:", insertRes.error);
       alert("Nu am putut crea sesiunea. Verifica conexiunea.");
+      pairState.sessionId = null;
       closePairModal();
       return;
     }
   } catch (e) {
     console.error("[pair] insert exception:", e);
     alert("Eroare la creare sesiune: " + e.message);
+    pairState.sessionId = null;
     closePairModal();
     return;
   }
@@ -2292,10 +2308,17 @@ function subscribeToPairingChannel(sessionId) {
     console.warn("[pair] Supabase Realtime not available");
     return;
   }
-  // Clean up any previous subscription
+  // If we already have an active channel for THIS session, don't recreate.
+  // Re-subscribing closes the old channel, losing in-flight messages.
+  if (pairState.channel && pairState.channelSessionId === sessionId) {
+    console.log("[pair] channel already exists for session:", sessionId);
+    return;
+  }
+  // Clean up any previous subscription (different session)
   if (pairState.channel) {
     try { window.sb.removeChannel(pairState.channel); } catch (e) {}
     pairState.channel = null;
+    pairState.channelSessionId = null;
   }
 
   var ch = window.sb.channel("pairing:" + sessionId, {
@@ -2328,10 +2351,11 @@ function subscribeToPairingChannel(sessionId) {
   });
 
   ch.subscribe(function(status) {
-    console.log("[pair] channel status:", status);
+    console.log("[pair] channel status:", status, "session:", sessionId);
   });
 
   pairState.channel = ch;
+  pairState.channelSessionId = sessionId;
 }
 
 function showPairToast(title, sub) {
