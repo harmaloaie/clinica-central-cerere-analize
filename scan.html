@@ -491,12 +491,11 @@ async function onQrSuccess(decodedText) {
   }
   var codPaun = codMatch[0].toUpperCase();
 
-  // Look up patient in pacienti table
+  // Look up patient in pacient_card_lookup view (public, anon-accessible)
   try {
-    var res = await window.sb.from("pacienti")
-      .select("cod_card, nume, prenume, cnp, email, telefon, discount_pct, activ")
+    var res = await window.sb.from("pacient_card_lookup")
+      .select("cod_card, nume, prenume, cnp, email, telefon, discount_pct")
       .eq("cod_card", codPaun)
-      .eq("activ", true)
       .maybeSingle();
 
     if (res.error) {
