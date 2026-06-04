@@ -1867,27 +1867,32 @@ function showScanError(msg) {
 }
 
 async function extractFromImage(base64Data, mediaType) {
-  var prompt = "Analizeaza acest bilet de trimitere medical romanesc (CAS). Extrage:\n\n" +
-    "1. **Numele si prenumele pacientului** — cauta in campul 'Nume si Prenume' sau similar\n" +
+  var prompt = "Analizeaza acest bilet de trimitere medical romanesc (CAS) sau reteta. Extrage:\n\n" +
+    "1. **Numele si prenumele pacientului** — cauta in campul 'Nume si Prenume' sau similar. Pe bilete romanesti de obicei ordinea este NUME PRENUME (familie, apoi prenume). Daca poti distinge clar, separa-le.\n" +
     "2. **CNP-ul pacientului** (13 cifre) — cauta in campul 'CID/CNP/CE/PASS'\n" +
-    "3. **Lista analizelor medicale** recomandate (coloana 'Investigatii recomandate')\n\n" +
-    "Pentru fiecare analiza, returneaza EXACT textul asa cum e scris pe bilet (chiar daca are typo-uri sau abrevieri).\n\n" +
-    "Pentru nume/prenume: pe bilete romanesti de obicei ordinea este NUME PRENUME (familie, apoi prenume). Daca poti distinge clar, separa-le. Daca nu esti sigur, lasa pe null.\n\n" +
+    "3. **Data nasterii** (format DD.MM.YYYY sau YYYY-MM-DD daca poti distinge)\n" +
+    "4. **Telefon** (poate fi format +40 sau 07XX XXX XXX)\n" +
+    "5. **Email** (daca apare)\n" +
+    "6. **Lista analizelor medicale** recomandate (coloana 'Investigatii recomandate' sau lista). Pentru fiecare analiza, returneaza EXACT textul asa cum e scris pe bilet (chiar daca are typo-uri sau abrevieri).\n\n" +
+    "Daca un camp lipseste sau nu poti citi cu certitudine, lasa pe null.\n\n" +
     "Raspunde DOAR cu JSON valid, fara alte comentarii, fara code blocks. Format:\n" +
     "{\n" +
     '  "nume": "string sau null",\n' +
     '  "prenume": "string sau null",\n' +
-    '  "cnp": "string 13 cifre sau null daca nu e clar",\n' +
+    '  "cnp": "string 13 cifre sau null",\n' +
+    '  "dataNasterii": "DD.MM.YYYY sau null",\n' +
+    '  "telefon": "string sau null",\n' +
+    '  "email": "string sau null",\n' +
     '  "analize": ["denumire analiza 1", "denumire analiza 2", ...]\n' +
     "}\n\n" +
-    "Daca biletul nu e lizibil sau nu e un bilet medical, returneaza { \"nume\": null, \"prenume\": null, \"cnp\": null, \"analize\": [] }.";
+    "Daca biletul nu e lizibil sau nu e un bilet medical, returneaza obiect cu toate campurile null si analize: [].";
 
   var response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
+      max_tokens: 1500,
       messages: [
         {
           role: "user",
@@ -1927,6 +1932,9 @@ async function extractFromImage(base64Data, mediaType) {
     nume: parsed.nume || null,
     prenume: parsed.prenume || null,
     cnp: parsed.cnp || null,
+    dataNasterii: parsed.dataNasterii || null,
+    telefon: parsed.telefon || null,
+    email: parsed.email || null,
     analize: parsed.analize
   };
 }
@@ -2062,6 +2070,8 @@ function showScanResults(extracted) {
   window.__scanCnp = extracted.cnp;
   window.__scanNume = extracted.nume;
   window.__scanPrenume = extracted.prenume;
+  window.__scanEmail = extracted.email;
+  window.__scanTelefon = extracted.telefon;
 
   // Wire up checkboxes
   var checks = document.querySelectorAll("#scanMatchedList .scan-item-check");
@@ -2096,12 +2106,31 @@ function showScanResults(extracted) {
         cnpInput.value = window.__scanCnp;
         updateCnpUi();
       }
-      // Add selected analize to cart
+      // Pre-populate email if detected and currently empty
+      if (window.__scanEmail && !emailInput.value.trim()) {
+        emailInput.value = window.__scanEmail;
+        cartState.email = window.__scanEmail;
+      }
+      // Pre-populate telefon if detected and currently empty
+      if (window.__scanTelefon && !telefonNumarInput.value.trim()) {
+        // Normalize: strip leading "+40" or "0"
+        var tel = String(window.__scanTelefon).replace(/[\s\-\.]/g, "");
+        if (tel.indexOf("+40") === 0) tel = tel.slice(3);
+        else if (tel.indexOf("0040") === 0) tel = tel.slice(4);
+        else if (tel.charAt(0) === "0") tel = tel.slice(1);
+        telefonNumarInput.value = tel;
+        cartState.telefonNumar = tel;
+      }
+      // Add selected analize to cart (cheapest offer per analiza)
       var added = 0;
       for (var i = 0; i < window.__scanMatched.length; i++) {
         if (window.__scanMatched[i].checked) {
-          addToCart(window.__scanMatched[i].entry.key);
-          added++;
+          var entry = window.__scanMatched[i].entry;
+          var ch = cheapestOffer(entry);
+          if (ch && ch.offer && ch.offer.Laborator) {
+            addToCart(entry.key, ch.offer.Laborator);
+            added++;
+          }
         }
       }
       scanResultModal.classList.remove("visible");
@@ -2287,9 +2316,15 @@ function subscribeToPairingChannel(sessionId) {
     handleScannedPatient(payload.payload || payload);
   });
 
-  // Patient scanned via bilet (Etapa 2 - placeholder)
+  // Bilet de trimitere photographed on phone, sent here for OCR
   ch.on("broadcast", { event: "scan_bilet" }, function(payload) {
-    console.log("[pair] scan_bilet (Etapa 2 not yet wired):", payload);
+    console.log("[pair] scan_bilet received");
+    var data = payload.payload || payload;
+    if (!data || !data.imageBase64) {
+      console.warn("[pair] scan_bilet missing imageBase64");
+      return;
+    }
+    handleBiletFromPhone(data);
   });
 
   ch.subscribe(function(status) {
@@ -2378,6 +2413,37 @@ function closePairModal() {
   pairModal.classList.remove("visible");
   // Keep the session alive in DB; just close the channel locally
   // (laptop may reopen pairing later in same session window)
+}
+
+// Handle a bilet image sent from phone via Realtime broadcast.
+// Pipeline: receive base64 -> show modal "processing" -> call existing
+// extractFromImage -> showScanResults (which already wires Add-to-cart).
+async function handleBiletFromPhone(data) {
+  // Switch to cart view if not already
+  switchView("cart");
+
+  // Show the existing scan modal in "processing" state
+  scanModal.classList.add("visible");
+  scanPickerArea.style.display = "none";
+  scanErrorArea.style.display = "none";
+  scanProcessingArea.style.display = "block";
+  document.getElementById("scanStatusText").textContent = "Bilet primit de pe telefon";
+  document.getElementById("scanStatusSub").textContent = "Claude analizeaza biletul...";
+
+  // Show preview
+  try {
+    document.getElementById("scanPreviewImg").src = "data:" + (data.mediaType || "image/jpeg") + ";base64," + data.imageBase64;
+  } catch (e) {}
+
+  showPairToast("Bilet primit de pe telefon", "Se analizeaza imaginea cu AI...");
+
+  try {
+    var extracted = await extractFromImage(data.imageBase64, data.mediaType || "image/jpeg");
+    showScanResults(extracted);
+  } catch (e) {
+    console.error("[bilet] OCR error:", e);
+    showScanError("Eroare la procesare bilet: " + (e.message || e));
+  }
 }
 
 // Apply Paun discount when computing effective price
