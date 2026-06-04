@@ -433,7 +433,10 @@ async function validateSession() {
     pairChannel.subscribe(function(status) {
       console.log("[scan] channel status:", status);
       if (status === "SUBSCRIBED") {
+        phoneChannelReady = true;
         pairChannel.send({ type: "broadcast", event: "phone_connected", payload: { ts: Date.now() } });
+      } else if (status === "CLOSED" || status === "CHANNEL_ERROR") {
+        phoneChannelReady = false;
       }
     });
 
@@ -453,6 +456,7 @@ function esc(s) {
 }
 
 var pairChannel = null;
+var phoneChannelReady = false;
 var qrScanner = null;
 
 // ─── Menu buttons ───
@@ -491,19 +495,41 @@ async function handleBiletFile(file) {
   sendingSub.textContent = "Reduc dimensiunea pentru transfer rapid";
 
   try {
-    // Compress image to keep under Realtime payload limit (~256KB)
-    var compressed = await compressImage(file, 1600, 0.75);
+    // Compress image to keep WELL under Realtime payload limit (~256KB).
+    // Try multiple quality settings if needed.
+    var compressed = await compressImage(file, 1400, 0.7);
+    // If too big, recompress with lower quality
+    var sizeKb = Math.round(compressed.base64.length * 0.75 / 1024);
+    if (sizeKb > 180) {
+      console.log("[bilet] first compression too big (" + sizeKb + " KB), recompressing harder");
+      compressed = await compressImage(file, 1100, 0.55);
+      sizeKb = Math.round(compressed.base64.length * 0.75 / 1024);
+    }
+    if (sizeKb > 180) {
+      console.log("[bilet] second compression too big (" + sizeKb + " KB), final compress");
+      compressed = await compressImage(file, 900, 0.5);
+      sizeKb = Math.round(compressed.base64.length * 0.75 / 1024);
+    }
 
-    // Show size info
-    var kb = Math.round(compressed.base64.length * 0.75 / 1024);
+    var kb = sizeKb;
+    sendingTitle.textContent = "Astept conexiunea... (" + kb + " KB)";
+    sendingSub.textContent = "Verific canalul cu laptopul";
+
+    // Wait for channel to be SUBSCRIBED before sending
+    var maxWait = 5000; // 5 seconds
+    var startWait = Date.now();
+    while (!phoneChannelReady && (Date.now() - startWait) < maxWait) {
+      await new Promise(function(r) { setTimeout(r, 100); });
+    }
+    if (!phoneChannelReady) {
+      throw new Error("Canalul cu laptopul nu raspunde. Verifica conexiunea si scaneaza QR-ul din nou.");
+    }
+
     sendingTitle.textContent = "Trimit la laptop... (" + kb + " KB)";
     sendingSub.textContent = "Laptopul citeste biletul cu AI";
 
-    // Send via Realtime broadcast
-    if (!pairChannel) {
-      throw new Error("Nu e conectat cu laptopul");
-    }
-    pairChannel.send({
+    // Send via Realtime broadcast — supabase-js v2 returns a Promise/awaitable here
+    var sendResult = await pairChannel.send({
       type: "broadcast",
       event: "scan_bilet",
       payload: {
@@ -512,6 +538,7 @@ async function handleBiletFile(file) {
         ts: Date.now()
       }
     });
+    console.log("[bilet] send result:", sendResult);
 
     // Show success after a brief delay
     setTimeout(function() {
@@ -520,7 +547,7 @@ async function handleBiletFile(file) {
         sent: true,
         sizeKb: kb
       });
-    }, 800);
+    }, 600);
 
   } catch (e) {
     console.error("[bilet] error:", e);
