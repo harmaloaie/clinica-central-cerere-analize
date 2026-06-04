@@ -658,11 +658,26 @@ body {
 }
 
 .cart-list {
-  flex: 1;
+  flex: 1 1 auto;
   overflow-y: auto;
   margin-right: -8px;
   padding-right: 8px;
+  /* Ensure cart-list keeps a decent visible area even when footer is tall */
+  min-height: 260px;
+  /* Visible scrollbar (gold themed) — much better than default */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(184,151,58,0.5) rgba(255,255,255,0.05);
 }
+.cart-list::-webkit-scrollbar { width: 8px; }
+.cart-list::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+}
+.cart-list::-webkit-scrollbar-thumb {
+  background: rgba(184,151,58,0.5);
+  border-radius: 4px;
+}
+.cart-list::-webkit-scrollbar-thumb:hover { background: rgba(184,151,58,0.7); }
 .cart-empty {
   padding: 40px 0;
   text-align: center;
@@ -679,11 +694,12 @@ body {
 }
 .cart-item {
   padding: 14px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid rgba(184,151,58,0.18);
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 10px;
 }
+.cart-item:first-child { padding-top: 8px; }
 .cart-item:last-child { border-bottom: none; }
 .cart-item-info { min-width: 0; }
 .cart-item-name {
@@ -755,6 +771,8 @@ body {
   margin-top: 20px;
   padding-top: 20px;
   border-top: 1px solid rgba(255,255,255,0.1);
+  /* Don't shrink, but also don't grow excessively */
+  flex-shrink: 0;
 }
 .eprubete-summary {
   margin-bottom: 18px;
@@ -763,6 +781,28 @@ body {
   border: 1px solid rgba(184,151,58,0.25);
   border-radius: var(--radius);
 }
+.eprubete-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0 0 10px 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.eprubete-toggle .eprubete-label { margin-bottom: 0; }
+.eprubete-toggle-icon {
+  color: var(--gold);
+  font-size: 14px;
+  transition: transform 0.2s ease;
+}
+.eprubete-summary.collapsed .eprubete-toggle-icon { transform: rotate(-90deg); }
+.eprubete-summary.collapsed .eprubete-list { display: none; }
+.eprubete-summary.collapsed .eprubete-toggle { margin-bottom: 0; }
 .eprubete-label {
   font-size: 10px;
   font-weight: 600;
@@ -778,8 +818,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  /* Limit height — if too many tube types, scroll inside */
-  max-height: 220px;
+  /* Smaller — eprubete should not dominate; user wants to see analize first */
+  max-height: 140px;
   overflow-y: auto;
   /* Subtle scrollbar styling */
   scrollbar-width: thin;
@@ -1391,7 +1431,10 @@ footer strong { color: var(--gold); }
   padding: 28px;
   position: sticky;
   top: 20px;
+  /* Use more vertical space for the cart pane */
   max-height: calc(100vh - 40px);
+  /* Ensure enough room for analize list even on shorter screens */
+  min-height: 540px;
   display: flex;
   flex-direction: column;
 }
