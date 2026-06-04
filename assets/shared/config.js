@@ -31,13 +31,6 @@
 
   window.CLINICA_CONFIG = isProduction ? PROD_CONFIG : STAGING_CONFIG;
 
-  // ────────────────────────────────────────────────────────────────
-  // Gemini API key (Google AI Studio) — same for staging & prod.
-  // Inlocuieste valoarea de mai jos cu cheia ta de la
-  // https://aistudio.google.com/apikey
-  // ────────────────────────────────────────────────────────────────
-  window.CLINICA_CONFIG.GEMINI_API_KEY = "AQ.Ab8RN6KS1BqRxNl-_ZQOAm5F26UdzLhK4wM2BAHQE_1uDPkKrA";
-
   // Banner vizibil pe staging — ca sa nu confunzi mediile
   if (isStaging) {
     window.addEventListener("DOMContentLoaded", function() {
