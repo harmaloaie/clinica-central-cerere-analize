@@ -196,6 +196,8 @@ function switchView(name) {
   document.getElementById("viewIstoric").style.display = (name === "istoric") ? "block" : "none";
   var bordEl = document.getElementById("viewBorderouri");
   if (bordEl) bordEl.style.display = (name === "borderouri") ? "block" : "none";
+  var adminEl = document.getElementById("viewAdmin");
+  if (adminEl) adminEl.style.display = (name === "admin") ? "block" : "none";
   var tabs = document.querySelectorAll(".topbar-tab");
   for (var i = 0; i < tabs.length; i++) {
     var t = tabs[i];
@@ -217,6 +219,8 @@ function switchView(name) {
     if (typeof loadIstoric === "function") loadIstoric();
   } else if (name === "borderouri") {
     if (typeof loadBorderouri === "function") loadBorderouri();
+  } else if (name === "admin") {
+    if (typeof loadAdminPreturi === "function") loadAdminPreturi();
   }
 }
 var tabs = document.querySelectorAll(".topbar-tab");
@@ -3663,3 +3667,245 @@ document.getElementById("borderouFilterLab").addEventListener("change", function
   renderBorderouPreview();
 });
 document.getElementById("btnBorderouGenerate").addEventListener("click", generateBorderouPDF);
+
+// ════════════════════════════════════════════════════════════════
+// ADMIN PRETURI CC
+// ════════════════════════════════════════════════════════════════
+
+var adminState = {
+  loaded: false,
+  list: [],
+  filter: "",
+  editingId: null  // null = add new, else = id of pret being edited
+};
+
+// Show/hide admin tab based on is_admin flag
+function setupAdminTabVisibility() {
+  var info = window.__CURRENT_USER_INFO__;
+  var isAdmin = !!(info && info.is_admin === true);
+  var tab = document.getElementById("tabAdmin");
+  if (tab) tab.style.display = isAdmin ? "" : "none";
+}
+
+// Normalize text the same way the DB function does
+function normForDb(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[ăâîșțĂÂÎȘȚ]/g, function(c) {
+      return { "ă": "a", "â": "a", "î": "i", "ș": "s", "ț": "t", "Ă": "a", "Â": "a", "Î": "i", "Ș": "s", "Ț": "t" }[c];
+    })
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function loadAdminPreturi() {
+  var tbody = document.getElementById("adminTableBody");
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Se incarca preturile...</td></tr>';
+  try {
+    var res = await window.sb.from("cc_preturi")
+      .select("id, denumire, denumire_norm, pret, activ, updated_at, updated_by")
+      .order("denumire", { ascending: true });
+    if (res.error) {
+      tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Eroare: ' + esc(res.error.message) + '</td></tr>';
+      return;
+    }
+    adminState.list = res.data || [];
+    adminState.loaded = true;
+    renderAdminTable();
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Eroare: ' + esc(String(e)) + '</td></tr>';
+  }
+}
+
+function renderAdminTable() {
+  var tbody = document.getElementById("adminTableBody");
+  var countEl = document.getElementById("adminCount");
+  if (!tbody) return;
+  var filter = (adminState.filter || "").toLowerCase().trim();
+  var filtered = adminState.list;
+  if (filter) {
+    filtered = filtered.filter(function(p) {
+      return (p.denumire || "").toLowerCase().indexOf(filter) !== -1
+        || (p.denumire_norm || "").toLowerCase().indexOf(filter) !== -1;
+    });
+  }
+  if (countEl) {
+    countEl.textContent = filtered.length + " / " + adminState.list.length + " preturi";
+  }
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Niciun pret gasit.</td></tr>';
+    return;
+  }
+  var html = "";
+  for (var i = 0; i < filtered.length; i++) {
+    var p = filtered[i];
+    var updatedAt = p.updated_at ? new Date(p.updated_at).toLocaleString("ro-RO", { dateStyle: "short", timeStyle: "short" }) : "—";
+    html += '<tr' + (p.activ ? '' : ' class="inactive"') + ' data-id="' + p.id + '">' +
+      '<td>' + esc(p.denumire) + '</td>' +
+      '<td class="pret-val">' + Number(p.pret).toFixed(2) + '</td>' +
+      '<td>' + (p.activ ? '✓' : '—') + '</td>' +
+      '<td class="meta-small">' + updatedAt + '</td>' +
+      '<td class="row-actions"><button type="button" class="row-edit-btn" data-edit-id="' + p.id + '">Editeaza</button></td>' +
+      '</tr>';
+  }
+  tbody.innerHTML = html;
+  // Wire up edit buttons
+  var btns = tbody.querySelectorAll(".row-edit-btn");
+  for (var j = 0; j < btns.length; j++) {
+    btns[j].addEventListener("click", function(e) {
+      var id = parseInt(e.target.getAttribute("data-edit-id"), 10);
+      openAdminEditModal(id);
+    });
+  }
+}
+
+function openAdminEditModal(id) {
+  var modal = document.getElementById("adminEditModal");
+  var title = document.getElementById("adminEditTitle");
+  var dInput = document.getElementById("adminEditDenumire");
+  var pInput = document.getElementById("adminEditPret");
+  var aInput = document.getElementById("adminEditActiv");
+  var delBtn = document.getElementById("adminEditDelete");
+  var errEl = document.getElementById("adminEditError");
+
+  errEl.classList.remove("visible");
+  errEl.textContent = "";
+
+  if (id) {
+    var item = adminState.list.find(function(x) { return x.id === id; });
+    if (!item) return;
+    adminState.editingId = id;
+    title.textContent = "Editeaza pret";
+    dInput.value = item.denumire || "";
+    pInput.value = Number(item.pret).toFixed(2);
+    aInput.checked = !!item.activ;
+    delBtn.style.display = "";
+  } else {
+    adminState.editingId = null;
+    title.textContent = "Adauga pret nou";
+    dInput.value = "";
+    pInput.value = "";
+    aInput.checked = true;
+    delBtn.style.display = "none";
+  }
+  modal.classList.add("visible");
+  setTimeout(function() { dInput.focus(); }, 50);
+}
+
+function closeAdminEditModal() {
+  document.getElementById("adminEditModal").classList.remove("visible");
+  adminState.editingId = null;
+}
+
+async function saveAdminEdit() {
+  var dInput = document.getElementById("adminEditDenumire");
+  var pInput = document.getElementById("adminEditPret");
+  var aInput = document.getElementById("adminEditActiv");
+  var errEl = document.getElementById("adminEditError");
+  var saveBtn = document.getElementById("adminEditSave");
+
+  var denumire = dInput.value.trim();
+  var pret = parseFloat(pInput.value);
+  var activ = !!aInput.checked;
+
+  if (!denumire) {
+    errEl.textContent = "Denumirea e obligatorie.";
+    errEl.classList.add("visible");
+    return;
+  }
+  if (isNaN(pret) || pret < 0) {
+    errEl.textContent = "Pretul e invalid.";
+    errEl.classList.add("visible");
+    return;
+  }
+
+  errEl.classList.remove("visible");
+  saveBtn.disabled = true;
+  saveBtn.textContent = "Se salveaza...";
+
+  var denumireNorm = normForDb(denumire);
+  var userId = window.__CURRENT_USER__ ? window.__CURRENT_USER__.id : null;
+
+  try {
+    var res;
+    if (adminState.editingId) {
+      res = await window.sb.from("cc_preturi")
+        .update({ denumire: denumire, denumire_norm: denumireNorm, pret: pret, activ: activ, updated_by: userId })
+        .eq("id", adminState.editingId)
+        .select();
+    } else {
+      res = await window.sb.from("cc_preturi")
+        .insert([{ denumire: denumire, denumire_norm: denumireNorm, pret: pret, activ: activ, updated_by: userId }])
+        .select();
+    }
+    if (res.error) {
+      errEl.textContent = "Eroare: " + (res.error.message || res.error);
+      errEl.classList.add("visible");
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Salveaza";
+      return;
+    }
+    closeAdminEditModal();
+    // Update in-memory cache
+    if (activ) {
+      PRETURI_CC[denumireNorm] = pret;
+    } else {
+      delete PRETURI_CC[denumireNorm];
+    }
+    await loadAdminPreturi();
+  } catch (e) {
+    errEl.textContent = "Eroare: " + String(e.message || e);
+    errEl.classList.add("visible");
+  }
+  saveBtn.disabled = false;
+  saveBtn.textContent = "Salveaza";
+}
+
+async function deleteAdminEdit() {
+  if (!adminState.editingId) return;
+  if (!confirm("Esti sigur ca vrei sa stergi acest pret? Actiunea nu poate fi anulata.")) return;
+  var item = adminState.list.find(function(x) { return x.id === adminState.editingId; });
+  try {
+    var res = await window.sb.from("cc_preturi")
+      .delete()
+      .eq("id", adminState.editingId);
+    if (res.error) {
+      alert("Eroare la stergere: " + res.error.message);
+      return;
+    }
+    if (item) delete PRETURI_CC[item.denumire_norm];
+    closeAdminEditModal();
+    await loadAdminPreturi();
+  } catch (e) {
+    alert("Eroare: " + String(e.message || e));
+  }
+}
+
+// Wire up admin events
+(function() {
+  setupAdminTabVisibility();
+
+  var searchEl = document.getElementById("adminSearch");
+  if (searchEl) {
+    searchEl.addEventListener("input", function(e) {
+      adminState.filter = e.target.value;
+      renderAdminTable();
+    });
+  }
+  var addBtn = document.getElementById("adminBtnAdd");
+  if (addBtn) addBtn.addEventListener("click", function() { openAdminEditModal(null); });
+  var closeBtn = document.getElementById("adminEditClose");
+  if (closeBtn) closeBtn.addEventListener("click", closeAdminEditModal);
+  var cancelBtn = document.getElementById("adminEditCancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", closeAdminEditModal);
+  var saveBtn = document.getElementById("adminEditSave");
+  if (saveBtn) saveBtn.addEventListener("click", saveAdminEdit);
+  var delBtn = document.getElementById("adminEditDelete");
+  if (delBtn) delBtn.addEventListener("click", deleteAdminEdit);
+  var modal = document.getElementById("adminEditModal");
+  if (modal) modal.addEventListener("click", function(e) {
+    if (e.target === modal) closeAdminEditModal();
+  });
+})();
