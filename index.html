@@ -31,6 +31,7 @@
       <button class="topbar-tab" data-view="browse" role="tab" aria-selected="false">Explorator preturi</button>
       <button class="topbar-tab" data-view="istoric" role="tab" aria-selected="false">Istoric cereri</button>
       <button class="topbar-tab" data-view="borderouri" role="tab" aria-selected="false">Borderouri</button>
+      <button class="topbar-tab admin-only" data-view="admin" role="tab" aria-selected="false" id="tabAdmin" style="display:none">Admin preturi</button>
     </nav>
     <div class="topbar-user">
       <span id="topbarUserEmail"></span>
@@ -137,12 +138,14 @@
           </button>
           <ul class="eprubete-list" id="eprubeteList"></ul>
         </div>
-        <div class="cart-totals">
-          <span class="cart-totals-label">Total estimativ</span>
-          <span class="cart-totals-value" id="cartTotal">— RON</span>
+        <div class="cart-action-sticky">
+          <div class="cart-totals">
+            <span class="cart-totals-label">Total estimativ</span>
+            <span class="cart-totals-value" id="cartTotal">— RON</span>
+          </div>
+          <button class="cart-btn-process" id="btnProcess" disabled>Proceseaza cererea</button>
+          <button class="cart-btn-clear" id="btnClearCart">Goleste cererea</button>
         </div>
-        <button class="cart-btn-process" id="btnProcess" disabled>Proceseaza cererea</button>
-        <button class="cart-btn-clear" id="btnClearCart">Goleste cererea</button>
 
         <button class="disc-toggle-cart" id="discToggleCart">&#9881; Ajusteaza discount-uri</button>
         <div class="disc-panel-cart" id="discPanelCart"></div>
@@ -322,6 +325,78 @@
     </div>
   </main>
 </div>
+
+<!-- ═════════════════════════════════════════════════════════════ -->
+<!-- VIEW 5: ADMIN PRETURI (visible only for is_admin) -->
+<!-- ═════════════════════════════════════════════════════════════ -->
+<div class="view" id="viewAdmin" style="display:none">
+  <main class="main wide">
+    <div class="istoric-header">
+      <div>
+        <div class="pane-label">Admin</div>
+        <h2 class="pane-title">Gestiune preturi Clinica Central</h2>
+        <p class="pane-sub">Editeaza, adauga sau dezactiveaza preturi. Modificarile sunt vizibile imediat in aplicatie. Cauta cu numele analizei (case-insensitive).</p>
+      </div>
+    </div>
+
+    <div class="admin-toolbar">
+      <input type="text" id="adminSearch" class="admin-search" placeholder="Cauta analiza...">
+      <button type="button" class="admin-btn-add" id="adminBtnAdd">+ Adauga pret nou</button>
+      <span class="admin-count" id="adminCount"></span>
+    </div>
+
+    <div class="admin-table-wrap">
+      <table class="admin-table" id="adminTable">
+        <thead>
+          <tr>
+            <th>Denumire</th>
+            <th>Pret (RON)</th>
+            <th>Activ</th>
+            <th>Ultima modificare</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="adminTableBody">
+          <tr><td colspan="5" class="admin-loading">Se incarca preturile...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<!-- Modal: edit/add pret -->
+<div class="modal-overlay" id="adminEditModal">
+  <div class="modal-box admin-edit-box">
+    <button class="modal-close" id="adminEditClose" type="button" aria-label="Inchide">&times;</button>
+    <div class="modal-header">
+      <div class="modal-tag">Admin preturi</div>
+      <h2 class="modal-title" id="adminEditTitle">Editeaza pret</h2>
+    </div>
+    <div class="modal-body">
+      <div class="admin-form">
+        <label class="admin-label" for="adminEditDenumire">Denumire analiza</label>
+        <input type="text" class="admin-input" id="adminEditDenumire" placeholder="Ex: Glicemie">
+        <small class="admin-hint">Va fi normalizata automat pentru cautare.</small>
+
+        <label class="admin-label" for="adminEditPret" style="margin-top:16px">Pret (RON)</label>
+        <input type="number" class="admin-input" id="adminEditPret" step="0.01" min="0" placeholder="0.00">
+
+        <label class="admin-checkbox" style="margin-top:16px">
+          <input type="checkbox" id="adminEditActiv" checked>
+          <span>Pretul e activ (vizibil in aplicatie)</span>
+        </label>
+
+        <div id="adminEditError" class="admin-error"></div>
+
+        <div class="admin-form-actions">
+          <button type="button" class="admin-btn-cancel" id="adminEditCancel">Anuleaza</button>
+          <button type="button" class="admin-btn-delete" id="adminEditDelete" style="display:none">Sterge</button>
+          <button type="button" class="admin-btn-save" id="adminEditSave">Salveaza</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="modal-overlay" id="istoricDetailModal">
   <div class="modal-box istoric-detail-box">
     <button class="modal-close" id="istoricDetailClose" type="button" aria-label="Inchide">&times;</button>
@@ -491,7 +566,24 @@
     window.__DETAILS_POLIANA__ = polianaResp && polianaResp.ok ? await polianaResp.json() : {};
     window.__DETAILS_SOLOMED__ = solomedResp && solomedResp.ok ? await solomedResp.json() : {};
     window.__DETAILS_MEDILAB__ = medilabResp && medilabResp.ok ? await medilabResp.json() : {};
-    window.__PRETURI_CC__ = ccResp && ccResp.ok ? await ccResp.json() : {};
+
+    // Preturi CC: try Supabase first (live data, admin-editable), fallback to JSON
+    var preturiFromDb = null;
+    try {
+      var dbRes = await window.sb.from("cc_preturi")
+        .select("denumire_norm, pret")
+        .eq("activ", true);
+      if (!dbRes.error && Array.isArray(dbRes.data) && dbRes.data.length > 0) {
+        preturiFromDb = {};
+        for (var i = 0; i < dbRes.data.length; i++) {
+          preturiFromDb[dbRes.data[i].denumire_norm] = parseFloat(dbRes.data[i].pret);
+        }
+        console.log("[preturi-cc] Loaded " + dbRes.data.length + " preturi din Supabase");
+      }
+    } catch (e) {
+      console.warn("[preturi-cc] DB load failed, fallback to JSON:", e);
+    }
+    window.__PRETURI_CC__ = preturiFromDb || (ccResp && ccResp.ok ? await ccResp.json() : {});
   } catch (e) {
     console.error("Eroare incarcare date:", e);
     document.body.innerHTML = '<div style="padding:40px;text-align:center;font-family:sans-serif">Eroare la incarcarea datelor. Verifica consola browser-ului.</div>';
