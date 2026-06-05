@@ -2722,6 +2722,25 @@ footer strong { color: var(--gold); }
 }
 .admin-btn-add:hover { background: #2d3e5b; }
 
+.admin-btn-export {
+  padding: 12px 18px;
+  background: transparent;
+  color: var(--ink);
+  border: 1.5px solid rgba(15,17,23,0.2);
+  border-radius: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.admin-btn-export:hover {
+  background: var(--gold);
+  color: var(--ink);
+  border-color: var(--gold);
+}
+
 .admin-count {
   font-size: 12px;
   color: rgba(15,17,23,0.5);
