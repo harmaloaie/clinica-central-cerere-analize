@@ -879,6 +879,19 @@ body {
   align-items: baseline;
   margin-bottom: 16px;
 }
+
+/* Sticky action area: total + Proceseaza button always visible at bottom of cart pane */
+.cart-action-sticky {
+  position: sticky;
+  bottom: -28px;  /* compensate cart-pane-right padding-bottom of 28px so it sits flush */
+  margin-left: -28px;
+  margin-right: -28px;
+  padding: 16px 28px 28px 28px;
+  background: linear-gradient(180deg, rgba(15,17,23,0.85) 0%, var(--ink) 30%);
+  z-index: 5;
+  backdrop-filter: blur(6px);
+}
+.cart-action-sticky .cart-totals { margin-bottom: 14px; }
 .cart-totals-label {
   font-size: 11px;
   letter-spacing: 2px;
@@ -1433,11 +1446,17 @@ footer strong { color: var(--gold); }
   top: 20px;
   /* Use more vertical space for the cart pane */
   max-height: calc(100vh - 40px);
-  /* Ensure enough room for many analize (15-20+) */
-  min-height: 760px;
+  /* Removed min-height: it caused button to go out of viewport on tall content.
+     Now cart-pane scrolls internally if needed and "Proceseaza" stays sticky. */
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  /* Hide scrollbar visually but keep functionality */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(184,151,58,0.4) transparent;
 }
+.cart-pane-right::-webkit-scrollbar { width: 6px; }
+.cart-pane-right::-webkit-scrollbar-thumb { background: rgba(184,151,58,0.4); border-radius: 3px; }
 @media (max-width: 960px) {
   .cart-pane-right { position: static; max-height: none; }
 }
@@ -2647,3 +2666,222 @@ footer strong { color: var(--gold); }
   margin-left: 8px;
   vertical-align: middle;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN PRETURI CC
+   ═══════════════════════════════════════════════════════════════ */
+
+.admin-only {
+  /* admin tab gets a subtle gold dot to differentiate */
+  position: relative;
+}
+.admin-only::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+
+.admin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 20px 0 16px;
+  flex-wrap: wrap;
+}
+.admin-search {
+  flex: 1;
+  min-width: 260px;
+  padding: 12px 16px;
+  border: 1.5px solid rgba(15,17,23,0.15);
+  border-radius: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.admin-search:focus { border-color: var(--gold); }
+
+.admin-btn-add {
+  padding: 12px 20px;
+  background: var(--ink);
+  color: var(--paper);
+  border: none;
+  border-radius: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.admin-btn-add:hover { background: #2d3e5b; }
+
+.admin-count {
+  font-size: 12px;
+  color: rgba(15,17,23,0.5);
+  letter-spacing: 0.5px;
+}
+
+.admin-table-wrap {
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid rgba(15,17,23,0.08);
+  overflow: hidden;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.admin-table thead {
+  background: var(--ink);
+  color: var(--paper);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.admin-table th {
+  text-align: left;
+  padding: 12px 16px;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.admin-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(15,17,23,0.06);
+  vertical-align: middle;
+}
+.admin-table tbody tr:hover { background: rgba(184,151,58,0.05); }
+.admin-table tr.inactive { opacity: 0.4; }
+.admin-table .pret-val {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 700;
+  color: var(--ink);
+}
+.admin-table .row-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+.admin-table .row-edit-btn {
+  background: transparent;
+  border: 1px solid rgba(15,17,23,0.2);
+  color: var(--ink);
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.admin-table .row-edit-btn:hover {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.admin-table .meta-small {
+  font-size: 11px;
+  color: rgba(15,17,23,0.5);
+}
+.admin-loading {
+  padding: 40px;
+  text-align: center;
+  color: rgba(15,17,23,0.4);
+}
+
+/* Edit modal */
+.admin-edit-box { max-width: 480px; }
+.admin-form { display: flex; flex-direction: column; }
+.admin-label {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.admin-input {
+  padding: 12px 14px;
+  border: 1.5px solid rgba(15,17,23,0.15);
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.admin-input:focus { border-color: var(--gold); }
+.admin-hint {
+  font-size: 11px;
+  color: rgba(15,17,23,0.5);
+  margin-top: 4px;
+}
+.admin-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.admin-checkbox input { width: 18px; height: 18px; cursor: pointer; }
+
+.admin-form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+  justify-content: flex-end;
+}
+.admin-btn-cancel,
+.admin-btn-delete,
+.admin-btn-save {
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+}
+.admin-btn-cancel {
+  background: transparent;
+  color: rgba(15,17,23,0.6);
+  border: 1px solid rgba(15,17,23,0.15);
+}
+.admin-btn-cancel:hover { background: rgba(15,17,23,0.04); }
+.admin-btn-delete {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  margin-right: auto;
+}
+.admin-btn-delete:hover { background: var(--accent); color: #fff; }
+.admin-btn-save {
+  background: var(--gold);
+  color: var(--ink);
+}
+.admin-btn-save:hover { background: #d4ad48; }
+.admin-btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.admin-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(220,38,38,0.08);
+  border: 1px solid rgba(220,38,38,0.25);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--accent);
+  display: none;
+}
+.admin-error.visible { display: block; }
