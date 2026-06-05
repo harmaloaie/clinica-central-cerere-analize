@@ -570,17 +570,32 @@
     window.__DETAILS_MEDILAB__ = medilabResp && medilabResp.ok ? await medilabResp.json() : {};
 
     // Preturi CC: try Supabase first (live data, admin-editable), fallback to JSON
+    // Supabase has a default 1000-row cap, so we paginate.
     var preturiFromDb = null;
     try {
-      var dbRes = await window.sb.from("cc_preturi")
-        .select("denumire_norm, pret")
-        .eq("activ", true);
-      if (!dbRes.error && Array.isArray(dbRes.data) && dbRes.data.length > 0) {
+      var all = [];
+      var pageSize = 1000;
+      var page = 0;
+      while (true) {
+        var from = page * pageSize;
+        var to = from + pageSize - 1;
+        var dbRes = await window.sb.from("cc_preturi")
+          .select("denumire_norm, pret")
+          .eq("activ", true)
+          .range(from, to);
+        if (dbRes.error) { console.warn("[preturi-cc] DB load error:", dbRes.error); preturiFromDb = null; break; }
+        if (!Array.isArray(dbRes.data) || dbRes.data.length === 0) break;
+        all = all.concat(dbRes.data);
+        if (dbRes.data.length < pageSize) break;  // last page
+        page++;
+        if (page > 50) break;  // safety: never more than ~50k rows
+      }
+      if (all.length > 0) {
         preturiFromDb = {};
-        for (var i = 0; i < dbRes.data.length; i++) {
-          preturiFromDb[dbRes.data[i].denumire_norm] = parseFloat(dbRes.data[i].pret);
+        for (var i = 0; i < all.length; i++) {
+          preturiFromDb[all[i].denumire_norm] = parseFloat(all[i].pret);
         }
-        console.log("[preturi-cc] Loaded " + dbRes.data.length + " preturi din Supabase");
+        console.log("[preturi-cc] Loaded " + all.length + " preturi din Supabase (paginat)");
       }
     } catch (e) {
       console.warn("[preturi-cc] DB load failed, fallback to JSON:", e);
