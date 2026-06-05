@@ -3908,4 +3908,163 @@ async function deleteAdminEdit() {
   if (modal) modal.addEventListener("click", function(e) {
     if (e.target === modal) closeAdminEditModal();
   });
+
+  // Export buttons
+  var exportPdfBtn = document.getElementById("adminBtnExportPdf");
+  if (exportPdfBtn) exportPdfBtn.addEventListener("click", exportAdminPreturiPdf);
+  var exportXlsxBtn = document.getElementById("adminBtnExportXlsx");
+  if (exportXlsxBtn) exportXlsxBtn.addEventListener("click", exportAdminPreturiXlsx);
 })();
+
+// Returns the items that should be exported: respects current search filter
+function getAdminItemsForExport() {
+  var filter = (adminState.filter || "").toLowerCase().trim();
+  var list = adminState.list;
+  if (filter) {
+    list = list.filter(function(p) {
+      return (p.denumire || "").toLowerCase().indexOf(filter) !== -1
+        || (p.denumire_norm || "").toLowerCase().indexOf(filter) !== -1;
+    });
+  }
+  return list;
+}
+
+function exportAdminPreturiXlsx() {
+  var items = getAdminItemsForExport();
+  if (!items.length) { alert("Nu sunt preturi de exportat."); return; }
+
+  var rows = items.map(function(p) {
+    return {
+      "Denumire": p.denumire || "",
+      "Pret (RON)": Number(p.pret),
+      "Activ": p.activ ? "DA" : "NU",
+      "Ultima modificare": p.updated_at ? new Date(p.updated_at).toLocaleString("ro-RO") : ""
+    };
+  });
+
+  var ws = XLSX.utils.json_to_sheet(rows);
+  // Column widths
+  ws['!cols'] = [
+    { wch: 60 }, // Denumire
+    { wch: 12 }, // Pret
+    { wch: 8 },  // Activ
+    { wch: 20 }  // Ultima modificare
+  ];
+
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Preturi CC");
+
+  var d = new Date();
+  var fname = "Preturi_Clinica_Central_" + d.getFullYear() +
+              "-" + String(d.getMonth() + 1).padStart(2, "0") +
+              "-" + String(d.getDate()).padStart(2, "0") + ".xlsx";
+  XLSX.writeFile(wb, fname);
+}
+
+function exportAdminPreturiPdf() {
+  var items = getAdminItemsForExport();
+  if (!items.length) { alert("Nu sunt preturi de exportat."); return; }
+
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  var pageW = doc.internal.pageSize.getWidth();
+  var pageH = doc.internal.pageSize.getHeight();
+  var margin = 14;
+
+  // Header: small black square with logo + title
+  var logoSize = 18;
+  doc.setFillColor(15, 17, 23);
+  doc.roundedRect(margin, margin, logoSize, logoSize, 2, 2, "F");
+  try {
+    var logo = getLogoForPdf();
+    if (logo && logo.dataUrl) {
+      doc.addImage(logo.dataUrl, "JPEG", margin + 2, margin + 2, logoSize - 4, logoSize - 4);
+    }
+  } catch (e) {}
+
+  // Title
+  doc.setTextColor(15, 17, 23);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.text("CLINICA CENTRAL", margin + logoSize + 6, margin + 7);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(184, 151, 58);
+  doc.text("Preturi catalog Clinica Central", margin + logoSize + 6, margin + 13);
+
+  // Meta line (date + total)
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  var d = new Date();
+  var dateStr = d.toLocaleDateString("ro-RO") + " " + d.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" });
+  var metaText = "Generat: " + dateStr + "  -  Total preturi: " + items.length;
+  doc.text(metaText, pageW - margin, margin + 7, { align: "right" });
+  if (adminState.filter) {
+    doc.text("Filtru: \"" + adminState.filter + "\"", pageW - margin, margin + 11, { align: "right" });
+  }
+
+  // Gold rule under header
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.5);
+  doc.line(margin, margin + logoSize + 4, pageW - margin, margin + logoSize + 4);
+
+  // Build table data
+  var head = [["#", "Denumire", "Pret (RON)", "Activ"]];
+  var body = items.map(function(p, i) {
+    return [
+      String(i + 1),
+      p.denumire || "",
+      Number(p.pret).toFixed(2),
+      p.activ ? "DA" : "NU"
+    ];
+  });
+
+  doc.autoTable({
+    head: head,
+    body: body,
+    startY: margin + logoSize + 10,
+    margin: { left: margin, right: margin },
+    theme: "plain",
+    styles: {
+      font: "helvetica",
+      fontSize: 9,
+      cellPadding: { top: 2.5, right: 4, bottom: 2.5, left: 4 },
+      textColor: [15, 17, 23],
+      lineColor: [220, 215, 200],
+      lineWidth: 0.1
+    },
+    headStyles: {
+      fillColor: [15, 17, 23],
+      textColor: [184, 151, 58],
+      fontStyle: "bold",
+      fontSize: 8.5
+    },
+    columnStyles: {
+      0: { cellWidth: 12, halign: "right", textColor: [120, 120, 120] },
+      1: { cellWidth: "auto" },
+      2: { cellWidth: 28, halign: "right", fontStyle: "bold" },
+      3: { cellWidth: 16, halign: "center" }
+    },
+    alternateRowStyles: { fillColor: [248, 246, 241] },
+    didDrawCell: function(data) {
+      // Hairline borders under each row
+      if (data.section === "body" && data.column.index === 0) {
+        // already styled via lineWidth
+      }
+    },
+    didDrawPage: function(data) {
+      // Footer page number
+      var pageCount = doc.internal.getNumberOfPages();
+      var current = data.pageNumber;
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text("Pagina " + current + " din " + pageCount, pageW - margin, pageH - 8, { align: "right" });
+      doc.text("Clinica Central - Pitesti", margin, pageH - 8);
+    }
+  });
+
+  var fname = "Preturi_Clinica_Central_" + d.getFullYear() +
+              "-" + String(d.getMonth() + 1).padStart(2, "0") +
+              "-" + String(d.getDate()).padStart(2, "0") + ".pdf";
+  doc.save(fname);
+}
