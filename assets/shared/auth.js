@@ -18,7 +18,7 @@ window.ClinicaAuth = (function() {
     // Verifica daca userul are acces in tabela cc_useri_acces
     var accessResult = await window.sb
       .from("cc_useri_acces")
-      .select("user_id, email, nume, acces_central")
+      .select("user_id, email, nume, acces_central, is_admin")
       .eq("user_id", user.id)
       .maybeSingle();
 
