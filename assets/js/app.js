@@ -3704,14 +3704,28 @@ async function loadAdminPreturi() {
   if (!tbody) return;
   tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Se incarca preturile...</td></tr>';
   try {
-    var res = await window.sb.from("cc_preturi")
-      .select("id, denumire, denumire_norm, pret, activ, updated_at, updated_by")
-      .order("denumire", { ascending: true });
-    if (res.error) {
-      tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Eroare: ' + esc(res.error.message) + '</td></tr>';
-      return;
+    // Supabase has a default 1000-row cap; paginate to fetch all.
+    var all = [];
+    var pageSize = 1000;
+    var page = 0;
+    while (true) {
+      var from = page * pageSize;
+      var to = from + pageSize - 1;
+      var res = await window.sb.from("cc_preturi")
+        .select("id, denumire, denumire_norm, pret, activ, updated_at, updated_by")
+        .order("denumire", { ascending: true })
+        .range(from, to);
+      if (res.error) {
+        tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Eroare: ' + esc(res.error.message) + '</td></tr>';
+        return;
+      }
+      if (!Array.isArray(res.data) || res.data.length === 0) break;
+      all = all.concat(res.data);
+      if (res.data.length < pageSize) break;
+      page++;
+      if (page > 50) break;  // safety
     }
-    adminState.list = res.data || [];
+    adminState.list = all;
     adminState.loaded = true;
     renderAdminTable();
   } catch (e) {
