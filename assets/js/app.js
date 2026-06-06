@@ -4281,8 +4281,9 @@ async function pickDoc(r, type, dataRecoltareISO) {
   }
   var numarOrdine = savedCerere && savedCerere.numar_ordine ? savedCerere.numar_ordine : null;
 
-  closeDocPickerModal();
-
+  // IMPORTANT: Generate the PDF BEFORE closing the modal — closing the modal
+  // restores any istoric cartState snapshot, which would wipe the patient data
+  // that the PDF functions read from cartState.
   if (type === "recoltare") {
     exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO);
   } else if (type === "servicii") {
@@ -4290,6 +4291,8 @@ async function pickDoc(r, type, dataRecoltareISO) {
   } else if (type === "gdpr") {
     exportGdprConsent(r);
   }
+
+  closeDocPickerModal();
 }
 
 // Common helpers for new PDFs
@@ -4440,15 +4443,15 @@ function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
   var margin = 15;
   var contentWidth = pageWidth - 2 * margin;
   var s = pdfStripDiacritics;
+  var SAFE_BOTTOM = pageHeight - 12;  // reserve 12mm for page-number footer
 
   var y = pdfClinicHeader(doc, pageWidth, margin);
 
-  // Title block + cod cerere
+  // ---- Title + cod cerere ----
   doc.setFont("helvetica", "bold");
   doc.setFontSize(15);
   doc.setTextColor(15, 17, 23);
   doc.text("CERERE ANALIZE", margin, y);
-  // COD CERERE on right
   if (numarOrdine) {
     doc.setFontSize(11);
     doc.setTextColor(184, 151, 58);
@@ -4470,36 +4473,59 @@ function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
   }
   y += 2;
 
-  // Patient block
+  // ---- Patient block ----
   y = pdfPatientBlock(doc, r, { showSex: true, showVarsta: true }, y, pageWidth, margin);
 
-  // Analize — flat table (no category grouping)
+  // ---- Analize table ----
+  // Helper: draws table header at current y. Used both initially and when paginating.
+  function drawTableHeader() {
+    doc.setFillColor(15, 17, 23);
+    doc.rect(margin, y, contentWidth, 6, "F");
+    doc.setTextColor(184, 151, 58);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.text("Denumire", margin + 2, y + 4);
+    doc.text("Laborator", margin + 95, y + 4);
+    doc.text("Cant.", margin + 130, y + 4);
+    doc.text("Termen", margin + 145, y + 4);
+    doc.text("Pret", pageWidth - margin - 2, y + 4, { align: "right" });
+    y += 8;
+  }
+
+  // Section title "ANALIZE"
+  function ensureSpace(needed) {
+    if (y + needed > SAFE_BOTTOM) {
+      doc.addPage();
+      y = margin;
+      return true;
+    }
+    return false;
+  }
+
+  ensureSpace(14);  // title + first row
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.setTextColor(184, 151, 58);
   doc.text("ANALIZE", margin, y);
   y += 4;
 
-  var headerY = y;
-  doc.setFillColor(15, 17, 23);
-  doc.rect(margin, y, contentWidth, 6, "F");
-  doc.setTextColor(184, 151, 58);
-  doc.setFontSize(8);
-  doc.setFont("helvetica", "bold");
-  doc.text("Denumire", margin + 2, y + 4);
-  doc.text("Laborator", margin + 95, y + 4);
-  doc.text("Cant.", margin + 130, y + 4);
-  doc.text("Termen", margin + 145, y + 4);
-  doc.text("Pret", pageWidth - margin - 2, y + 4, { align: "right" });
-  y += 8;
-
+  drawTableHeader();
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(15, 17, 23);
 
+  // Iterate rows with strict pagination — re-draw table header on each new page
   for (var i = 0; i < r.items.length; i++) {
+    var rowHeight = 6;
+    if (y + rowHeight > SAFE_BOTTOM) {
+      doc.addPage();
+      y = margin;
+      drawTableHeader();
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(15, 17, 23);
+    }
     var it = r.items[i];
-    if (y > pageHeight - 30) { doc.addPage(); y = margin; }
     if (i % 2 === 1) {
       doc.setFillColor(248, 246, 241);
       doc.rect(margin, y - 4, contentWidth, 6, "F");
@@ -4517,7 +4543,8 @@ function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
     y += 6;
   }
 
-  // Total row
+  // ---- Total row ----
+  ensureSpace(14);
   y += 1;
   doc.setDrawColor(15, 17, 23);
   doc.setLineWidth(0.4);
@@ -4527,12 +4554,12 @@ function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
   doc.setFontSize(10);
   doc.text("Total", margin, y);
   doc.text(Number(r.grandTotal).toFixed(0) + " RON", pageWidth - margin, y, { align: "right" });
-  y += 8;
+  y += 10;
 
-  // Eprubete necesare
+  // ---- Eprubete necesare ----
   var eprubete = buildEprubetSummary(r.items);
   if (eprubete.length > 0) {
-    if (y > pageHeight - 50) { doc.addPage(); y = margin; }
+    ensureSpace(12);
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(184, 151, 58);
@@ -4544,22 +4571,33 @@ function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
 
     for (var k = 0; k < eprubete.length; k++) {
       var e = eprubete[k];
-      if (y > pageHeight - 20) { doc.addPage(); y = margin; }
+      var locs = Object.keys(e.breakdown || {});
+      // Estimate height of this group: title (4.5mm) + each breakdown line (4mm) + gap (2mm)
+      var groupHeight = 4.5 + locs.length * 4 + 2;
+      // Try to keep the whole group on one page
+      if (y + groupHeight > SAFE_BOTTOM) {
+        doc.addPage();
+        y = margin;
+      }
       doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(15, 17, 23);
       doc.text(e.count + "x  " + s(e.tip), margin + 2, y);
       y += 4.5;
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       doc.setTextColor(80, 80, 80);
-      var locs = Object.keys(e.breakdown || {});
       for (var li = 0; li < locs.length; li++) {
+        // Per-line safety: if it really doesn't fit, page break (rare case)
+        if (y + 4 > SAFE_BOTTOM) {
+          doc.addPage();
+          y = margin;
+        }
         var locname = locs[li];
         var cnt = e.breakdown[locname];
         doc.text("    " + cnt + "x  -  " + s(locname), margin + 4, y);
         y += 4;
       }
-      doc.setFontSize(9);
-      doc.setTextColor(15, 17, 23);
       y += 2;
     }
   }
@@ -4618,25 +4656,38 @@ function exportBuletinServicii(r, numarOrdine, dataRecoltareISO) {
   // Patient block
   y = pdfPatientBlock(doc, r, { showSex: true, showVarsta: true }, y, pageWidth, margin);
 
-  // Table header
-  doc.setFillColor(15, 17, 23);
-  doc.rect(margin, y, contentWidth, 6, "F");
-  doc.setTextColor(184, 151, 58);
-  doc.setFontSize(8);
-  doc.setFont("helvetica", "bold");
-  doc.text("Denumire analiza", margin + 2, y + 4);
-  doc.text("Laborator", margin + 95, y + 4);
-  doc.text("Termen executie", margin + 130, y + 4);
-  doc.text("Pret (RON)", pageWidth - margin - 2, y + 4, { align: "right" });
-  y += 8;
+  // ---- Helpers for pagination ----
+  var SAFE_BOTTOM = pageHeight - 12;
+  function drawServiciiHeader() {
+    doc.setFillColor(15, 17, 23);
+    doc.rect(margin, y, contentWidth, 6, "F");
+    doc.setTextColor(184, 151, 58);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.text("Denumire analiza", margin + 2, y + 4);
+    doc.text("Laborator", margin + 95, y + 4);
+    doc.text("Termen executie", margin + 130, y + 4);
+    doc.text("Pret (RON)", pageWidth - margin - 2, y + 4, { align: "right" });
+    y += 8;
+  }
+
+  drawServiciiHeader();
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(15, 17, 23);
 
   for (var i = 0; i < r.items.length; i++) {
+    var rowHeight = 6;
+    if (y + rowHeight > SAFE_BOTTOM) {
+      doc.addPage();
+      y = margin;
+      drawServiciiHeader();
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(15, 17, 23);
+    }
     var it = r.items[i];
-    if (y > pageHeight - 30) { doc.addPage(); y = margin; }
     if (i % 2 === 1) {
       doc.setFillColor(248, 246, 241);
       doc.rect(margin, y - 4, contentWidth, 6, "F");
@@ -4655,7 +4706,8 @@ function exportBuletinServicii(r, numarOrdine, dataRecoltareISO) {
     y += 6;
   }
 
-  // Total
+  // Total — needs ~20mm for total + 2 footer lines
+  if (y + 20 > SAFE_BOTTOM) { doc.addPage(); y = margin; }
   y += 2;
   doc.setDrawColor(15, 17, 23);
   doc.setLineWidth(0.4);
@@ -4668,6 +4720,7 @@ function exportBuletinServicii(r, numarOrdine, dataRecoltareISO) {
   y += 6;
 
   // Footer note: bon fiscal + verificati datele
+  if (y + 10 > SAFE_BOTTOM) { doc.addPage(); y = margin; }
   doc.setFontSize(8);
   doc.setFont("helvetica", "italic");
   doc.setTextColor(120, 120, 120);
@@ -4756,6 +4809,8 @@ function exportGdprConsent(r) {
   doc.setFontSize(9);
   doc.setTextColor(15, 17, 23);
 
+  var SAFE_BOTTOM = pageHeight - 12;
+
   var paragraphs = [
     "Conform cerintelor Regulamentului European 2016/679 privind protectia persoanelor fizice referitor la prelucrarea datelor cu caracter personal si libera circulatie a acestor date (\"GDPR\"), Clinica Central SRL are obligatia de a administra in conditii de siguranta si numai pentru scopurile specificate, datele personale pe care ni le furnizati despre dumneavoastra, un membru al familiei dumneavoastra, ori o alta persoana.",
     "Aplicam masurile tehnice si organizatorice adecvate pentru protejarea datelor cu caracter personal impotriva distrugerii accidentale sau ilegale, pierderii, modificarii, dezvaluirii sau accesului neautorizat. Clinica Central SRL a luat masurile de securitate conform Ordinului nr. 52/2002 privind aprobarea Cerintelor minime de securitate a prelucrarilor de date cu caracter personal.",
@@ -4767,14 +4822,15 @@ function exportGdprConsent(r) {
 
   for (var i = 0; i < paragraphs.length; i++) {
     var lines = doc.splitTextToSize(s(paragraphs[i]), contentWidth);
-    if (y + lines.length * 4 > pageHeight - 80) { doc.addPage(); y = margin; }
+    var blockHeight = lines.length * 4 + 2;
+    if (y + blockHeight > SAFE_BOTTOM) { doc.addPage(); y = margin; }
     doc.text(lines, margin, y);
-    y += lines.length * 4 + 2;
+    y += blockHeight;
   }
 
   y += 3;
 
-  // 5 consent rows with pre-ticked DA
+  // 5 consent rows with pre-ticked DA — each row needs ~9mm (separator + label + box)
   var consents = [
     "Accept prelucrarea datelor cu caracter personal in vederea efectuarii serviciilor medicale",
     "Accept colectarea adresei de email pentru trimiterea rezultatelor pe email",
@@ -4787,7 +4843,9 @@ function exportGdprConsent(r) {
   doc.setLineWidth(0.2);
 
   for (var c = 0; c < consents.length; c++) {
-    if (y > pageHeight - 50) { doc.addPage(); y = margin; }
+    // Each row needs 9mm; reserve also signature block (~32mm) to stay on same page if possible
+    var needed = (c === 0 ? 9 + 32 : 9);
+    if (y + needed > SAFE_BOTTOM) { doc.addPage(); y = margin; }
     doc.line(margin, y, pageWidth - margin, y);
     y += 5;
     doc.setFont("helvetica", "bold");
@@ -4818,8 +4876,8 @@ function exportGdprConsent(r) {
   doc.line(margin, y, pageWidth - margin, y);
   y += 8;
 
-  // Signature block
-  if (y > pageHeight - 40) { doc.addPage(); y = margin; }
+  // Signature block (~32mm needed: data + 4 rows of 6mm)
+  if (y + 32 > SAFE_BOTTOM) { doc.addPage(); y = margin; }
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(15, 17, 23);
