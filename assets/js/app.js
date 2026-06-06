@@ -120,6 +120,65 @@ function fmtRecipient(d) {
   return parts.join(" — ");
 }
 
+// ────────────────────────────────────────────────────────────────
+// CNP helpers — derive sex, varsta, dataNasterii from CNP
+// ────────────────────────────────────────────────────────────────
+
+// Romanian CNP first digit indicates century + sex:
+// 1=M 1900s, 2=F 1900s, 3=M 1800s, 4=F 1800s,
+// 5=M 2000s, 6=F 2000s, 7=M resident, 8=F resident, 9=foreign
+function sexFromCnp(cnp) {
+  if (!cnp || !/^\d{13}$/.test(cnp)) return "";
+  var first = parseInt(cnp.charAt(0), 10);
+  if (first === 1 || first === 3 || first === 5 || first === 7) return "M";
+  if (first === 2 || first === 4 || first === 6 || first === 8) return "F";
+  return "";
+}
+
+function dataNasteriiFromCnp(cnp) {
+  if (!cnp || !/^\d{13}$/.test(cnp)) return "";
+  var first = parseInt(cnp.charAt(0), 10);
+  var century;
+  if (first === 1 || first === 2) century = 1900;
+  else if (first === 3 || first === 4) century = 1800;
+  else if (first === 5 || first === 6) century = 2000;
+  else if (first === 7 || first === 8) {
+    // resident — assume 1900 unless year>current year, then 2000
+    var yy0 = parseInt(cnp.substr(1, 2), 10);
+    var nowYY = new Date().getFullYear() % 100;
+    century = yy0 > nowYY ? 1900 : 2000;
+  } else return "";
+  var yy = cnp.substr(1, 2);
+  var mm = cnp.substr(3, 2);
+  var dd = cnp.substr(5, 2);
+  return dd + "." + mm + "." + (century + parseInt(yy, 10));
+}
+
+// Calculate age in years from "DD.MM.YYYY"
+function varstaFromDataNasterii(dn) {
+  if (!dn) return "";
+  var parts = dn.split(/[.\-\/]/);
+  if (parts.length !== 3) return "";
+  var day, month, year;
+  // DD.MM.YYYY or YYYY-MM-DD
+  if (parts[0].length === 4) {
+    year = parseInt(parts[0], 10);
+    month = parseInt(parts[1], 10);
+    day = parseInt(parts[2], 10);
+  } else {
+    day = parseInt(parts[0], 10);
+    month = parseInt(parts[1], 10);
+    year = parseInt(parts[2], 10);
+  }
+  if (!year || !month || !day) return "";
+  var now = new Date();
+  var age = now.getFullYear() - year;
+  var m = now.getMonth() + 1 - month;
+  if (m < 0 || (m === 0 && now.getDate() < day)) age--;
+  return age > 0 && age < 130 ? age : "";
+}
+
+
 // Build summary of physical tubes needed.
 // Rule: 1 tube per (location, recipient_type) — analize at the SAME location with SAME tube type share one tube.
 // "Location" comes from LaboratorSubcontractant (where the sample is physically processed).
@@ -245,6 +304,10 @@ var cartState = {
   email: "",
   telefonPrefix: "+40",
   telefonNumar: "",
+  // Optional: from OCR (bilet de trimitere)
+  numeMedic: "",       // populated from OCR if available
+  sex: "",             // M or F, derived from CNP or OCR
+  dataNasterii: "",    // DD.MM.YYYY, from OCR or CNP
   // Validation flags
   prenumeValid: false,
   numeValid: false,
@@ -989,7 +1052,7 @@ function openReport() {
   body += '</div>';
 
   body += '<div class="report-actions">';
-  body += '<button class="report-btn primary" id="btnExportPdf">&#11015; Export PDF</button>';
+  body += '<button class="report-btn primary" id="btnExportPdf">&#11015; Genereaza document</button>';
   body += '<button class="report-btn" id="btnExportReport">&#11015; Export Excel</button>';
   body += '<button class="report-btn" id="btnExportJson">&#11015; Export JSON</button>';
   body += '<button class="report-btn" id="btnCloseReport">Inchide</button>';
@@ -1000,12 +1063,13 @@ function openReport() {
   document.body.style.overflow = "hidden";
 
   document.getElementById("btnCloseReport").addEventListener("click", closeReport);
-  document.getElementById("btnExportPdf").addEventListener("click", function() { exportReportPdf(r); });
+  document.getElementById("btnExportPdf").addEventListener("click", function() { openDocPickerModal(r); });
   document.getElementById("btnExportReport").addEventListener("click", function() { exportReportXlsx(r); });
   document.getElementById("btnExportJson").addEventListener("click", function() { exportReportJson(r); });
 
   // Auto-save the cerere to Supabase (non-blocking, but show status)
-  saveCerere(r);
+  // Save returned saveCerere promise so PDF generators can await numar_ordine
+  window.__currentCerereSavePromise = saveCerere(r);
 }
 function closeReport() {
   document.getElementById("reportOverlay").classList.remove("visible");
@@ -1914,6 +1978,8 @@ async function extractFromImage(base64Data, mediaType) {
     dataNasterii: parsed.dataNasterii || null,
     telefon: parsed.telefon || null,
     email: parsed.email || null,
+    numeMedic: parsed.numeMedic || null,
+    sex: parsed.sex || null,
     analize: parsed.analize
   };
 }
@@ -2051,6 +2117,9 @@ function showScanResults(extracted) {
   window.__scanPrenume = extracted.prenume;
   window.__scanEmail = extracted.email;
   window.__scanTelefon = extracted.telefon;
+  window.__scanNumeMedic = extracted.numeMedic;
+  window.__scanSex = extracted.sex;
+  window.__scanDataNasterii = extracted.dataNasterii;
 
   // Wire up checkboxes
   var checks = document.querySelectorAll("#scanMatchedList .scan-item-check");
@@ -2100,6 +2169,10 @@ function showScanResults(extracted) {
         telefonNumarInput.value = tel;
         cartState.telefonNumar = tel;
       }
+      // Save medic, sex, dataNasterii (from OCR) onto cartState for use in PDFs
+      if (window.__scanNumeMedic) cartState.numeMedic = window.__scanNumeMedic;
+      if (window.__scanSex) cartState.sex = window.__scanSex;
+      if (window.__scanDataNasterii) cartState.dataNasterii = window.__scanDataNasterii;
       // Add selected analize to cart (cheapest offer per analiza)
       var added = 0;
       for (var i = 0; i < window.__scanMatched.length; i++) {
@@ -2796,20 +2869,34 @@ function exportIstoricXlsx(id) {
 function exportIstoricPdf(id) {
   var c = istoricState.cereri.find(function(x){ return x.id === id; });
   if (!c) return;
-  var saved = {
+
+  // Snapshot current cartState so we can restore after the user closes the picker.
+  // PDF helpers read patient info from cartState directly.
+  window.__istoricCartSnapshot = {
     prenume: cartState.prenume, nume: cartState.nume, cnp: cartState.cnp,
-    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar
+    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar,
+    numeMedic: cartState.numeMedic, sex: cartState.sex, dataNasterii: cartState.dataNasterii
   };
+  // Inject istoric patient data into cartState
   cartState.prenume = c.pacient_prenume || "";
   cartState.nume = c.pacient_nume || "";
   cartState.cnp = c.cnp_pacient || "";
   cartState.email = c.pacient_email || "";
   cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
   cartState.telefonNumar = c.pacient_telefon_numar || "";
+  // numeMedic isn't saved in cc_cereri; sex + dataNasterii get derived from CNP automatically
+  cartState.numeMedic = "";
+  cartState.sex = "";
+  cartState.dataNasterii = "";
+
   var r = rebuildReportFromCerere(c);
-  exportReportPdf(r);
-  cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
-  cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
+
+  // For istoric, numar_ordine is already known — short-circuit the saveCerere promise.
+  window.__currentCerereSavePromise = Promise.resolve({ numar_ordine: c.numar_ordine || null });
+
+  // Open doc picker — user chooses Recoltare / Servicii / GDPR.
+  // closeDocPickerModal will detect the snapshot and restore cartState.
+  openDocPickerModal(r);
 }
 
 // ─── Export JSON from istoric ───
@@ -4081,4 +4168,737 @@ function exportAdminPreturiPdf() {
               "-" + String(d.getMonth() + 1).padStart(2, "0") +
               "-" + String(d.getDate()).padStart(2, "0") + ".pdf";
   doc.save(fname);
+}
+
+// ════════════════════════════════════════════════════════════════
+// DOCUMENT PICKER — 3 PDF types (Buletin servicii / recoltare / GDPR)
+// ════════════════════════════════════════════════════════════════
+
+function openDocPickerModal(r) {
+  // Build modal markup if not present yet
+  var existing = document.getElementById("docPickerModal");
+  if (existing) existing.remove();
+
+  var today = new Date();
+  var todayISO = today.getFullYear() + "-" +
+                 String(today.getMonth() + 1).padStart(2, "0") + "-" +
+                 String(today.getDate()).padStart(2, "0");
+
+  var overlay = document.createElement("div");
+  overlay.id = "docPickerModal";
+  overlay.className = "modal-overlay visible";
+  overlay.innerHTML =
+    '<div class="modal-box doc-picker-box">' +
+      '<button class="modal-close" id="docPickerClose" type="button">&times;</button>' +
+      '<div class="modal-header">' +
+        '<div class="modal-tag">Documente</div>' +
+        '<h2 class="modal-title">Genereaza document PDF</h2>' +
+        '<p class="modal-sub">Alege ce vrei sa generezi. Documentele se salveaza local.</p>' +
+      '</div>' +
+      '<div class="modal-body">' +
+        '<div class="doc-options">' +
+          '<button class="doc-option" data-doc="recoltare">' +
+            '<div class="doc-option-icon">&#128203;</div>' +
+            '<div class="doc-option-info">' +
+              '<div class="doc-option-title">Buletin recoltare</div>' +
+              '<div class="doc-option-sub">Cerere analize cu detalii eprubete si laboratoare (pentru personalul medical)</div>' +
+            '</div>' +
+          '</button>' +
+          '<button class="doc-option" data-doc="servicii">' +
+            '<div class="doc-option-icon">&#128179;</div>' +
+            '<div class="doc-option-info">' +
+              '<div class="doc-option-title">Buletin servicii</div>' +
+              '<div class="doc-option-sub">Bonul pentru client - analize si preturi, fara detalii tehnice</div>' +
+            '</div>' +
+          '</button>' +
+          '<button class="doc-option" data-doc="gdpr">' +
+            '<div class="doc-option-icon">&#9989;</div>' +
+            '<div class="doc-option-info">' +
+              '<div class="doc-option-title">Consimtamant GDPR</div>' +
+              '<div class="doc-option-sub">Formular GDPR pre-completat cu datele pacientului, pentru semnatura</div>' +
+            '</div>' +
+          '</button>' +
+        '</div>' +
+        '<div class="doc-meta">' +
+          '<label class="doc-meta-row">' +
+            '<span>Data recoltare</span>' +
+            '<input type="date" id="docDataRecoltare" value="' + todayISO + '">' +
+          '</label>' +
+          '<div class="doc-meta-hint">Data recoltare se foloseste pe buletinul de recoltare.</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  document.getElementById("docPickerClose").addEventListener("click", closeDocPickerModal);
+  overlay.addEventListener("click", function(e) {
+    if (e.target === overlay) closeDocPickerModal();
+  });
+  var opts = overlay.querySelectorAll(".doc-option");
+  for (var i = 0; i < opts.length; i++) {
+    opts[i].addEventListener("click", function() {
+      var type = this.getAttribute("data-doc");
+      var dataRecoltareInput = document.getElementById("docDataRecoltare");
+      var dataRecoltare = dataRecoltareInput ? dataRecoltareInput.value : todayISO;
+      pickDoc(r, type, dataRecoltare);
+    });
+  }
+}
+
+function closeDocPickerModal() {
+  var m = document.getElementById("docPickerModal");
+  if (m) m.remove();
+
+  // If we were opened from istoric view, restore the original cartState
+  // so the active cerere being built isn't polluted.
+  if (window.__istoricCartSnapshot) {
+    var snap = window.__istoricCartSnapshot;
+    cartState.prenume = snap.prenume;
+    cartState.nume = snap.nume;
+    cartState.cnp = snap.cnp;
+    cartState.email = snap.email;
+    cartState.telefonPrefix = snap.telefonPrefix;
+    cartState.telefonNumar = snap.telefonNumar;
+    cartState.numeMedic = snap.numeMedic;
+    cartState.sex = snap.sex;
+    cartState.dataNasterii = snap.dataNasterii;
+    window.__istoricCartSnapshot = null;
+  }
+}
+
+async function pickDoc(r, type, dataRecoltareISO) {
+  // Get numar_ordine — wait for saveCerere to resolve (max 5s)
+  var savedCerere = null;
+  if (window.__currentCerereSavePromise) {
+    try {
+      savedCerere = await Promise.race([
+        window.__currentCerereSavePromise,
+        new Promise(function(resolve) { setTimeout(function() { resolve(null); }, 5000); })
+      ]);
+    } catch (e) {
+      console.warn("[pickDoc] saveCerere failed:", e);
+    }
+  }
+  var numarOrdine = savedCerere && savedCerere.numar_ordine ? savedCerere.numar_ordine : null;
+
+  // IMPORTANT: Generate the PDF BEFORE closing the modal — closing the modal
+  // restores any istoric cartState snapshot, which would wipe the patient data
+  // that the PDF functions read from cartState.
+  if (type === "recoltare") {
+    exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO);
+  } else if (type === "servicii") {
+    exportBuletinServicii(r, numarOrdine, dataRecoltareISO);
+  } else if (type === "gdpr") {
+    exportGdprConsent(r);
+  }
+
+  closeDocPickerModal();
+}
+
+// Common helpers for new PDFs
+function pdfStripDiacritics(text) {
+  if (!text) return "";
+  return String(text).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function pdfFormatDateISO(iso) {
+  // iso = "2026-06-06" → "06/06/2026"
+  if (!iso) return "";
+  var parts = iso.split("-");
+  if (parts.length !== 3) return iso;
+  return parts[2] + "/" + parts[1] + "/" + parts[0];
+}
+
+function pdfTodayDDMMYYYY() {
+  var d = new Date();
+  return String(d.getDate()).padStart(2, "0") + "/" +
+         String(d.getMonth() + 1).padStart(2, "0") + "/" +
+         d.getFullYear();
+}
+
+// Add execution-date computed from "now" + days
+function pdfExecutionDate(timpText) {
+  if (!timpText) return "";
+  // Parse "2 zile lucratoare", "o zi lucratoare", "24h", etc.
+  var t = String(timpText).toLowerCase();
+  var days = 0;
+  var match = t.match(/(\d+)\s*zil/);
+  if (match) days = parseInt(match[1], 10);
+  else if (/o\s+zi/.test(t)) days = 1;
+  else if (/24\s*h/.test(t)) days = 1;
+  if (!days) return "";
+  // Add business days (skip Sat/Sun)
+  var d = new Date();
+  var added = 0;
+  while (added < days) {
+    d.setDate(d.getDate() + 1);
+    var wd = d.getDay();
+    if (wd !== 0 && wd !== 6) added++;
+  }
+  return String(d.getDate()).padStart(2, "0") + "/" +
+         String(d.getMonth() + 1).padStart(2, "0") + "/" +
+         d.getFullYear();
+}
+
+function pdfClinicHeader(doc, pageWidth, margin) {
+  var s = pdfStripDiacritics;
+  var logo = getLogoForPdf();
+  var y = margin;
+  var logoBoxSize = 20;
+  var textX = margin;
+  if (logo) {
+    doc.setFillColor(15, 17, 23);
+    doc.roundedRect(margin, margin - 2, logoBoxSize, logoBoxSize, 2, 2, "F");
+    try { doc.addImage(logo.dataUrl, "JPEG", margin + 2, margin, logoBoxSize - 4, logoBoxSize - 4); } catch (e) {}
+    textX = margin + logoBoxSize + 6;
+  }
+  doc.setTextColor(15, 17, 23);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text("CLINICA CENTRAL SRL", textX, margin + 4);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(80, 80, 80);
+  doc.text(s("Bulevardul Republicii 48, Pitesti Arges"), textX, margin + 9);
+  doc.text("0772148148 / 0775148148  -  clinicacentralpitesti@gmail.com", textX, margin + 13);
+  doc.text("www.clinicacentral.ro", textX, margin + 17);
+
+  // gold underline
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.5);
+  doc.line(margin, margin + 22, pageWidth - margin, margin + 22);
+
+  return margin + 28; // y position after header
+}
+
+function pdfPatientBlock(doc, r, opts, startY, pageWidth, margin) {
+  // opts: { showSex, showVarsta, showAdresa, fullCnp }
+  var s = pdfStripDiacritics;
+  var fullName = [cartState.prenume.trim(), cartState.nume.trim()].filter(Boolean).join(" ");
+  var sex = cartState.sex || sexFromCnp(cartState.cnp);
+  var dn = cartState.dataNasterii || dataNasteriiFromCnp(cartState.cnp);
+  var varsta = dn ? varstaFromDataNasterii(dn) : "";
+
+  // Table-style patient row (label header above, value below)
+  var y = startY;
+  doc.setFontSize(7);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(120, 120, 120);
+
+  // Columns: Nume / Email / Telefon / Sex / Varsta / CNP — but only show what we have
+  // Weights tuned so email (usually longest) gets enough room.
+  var cols = [];
+  cols.push({ label: "PACIENT", value: fullName || "—", weight: 2.6, fontSize: 10 });
+  if (cartState.email) cols.push({ label: "EMAIL", value: cartState.email, weight: 3.4, fontSize: 9 });
+  if (cartState.telefonNumar) cols.push({ label: "TELEFON", value: cartState.telefonPrefix + " " + cartState.telefonNumar, weight: 1.8, fontSize: 9 });
+  if (opts.showSex && sex) cols.push({ label: "SEX", value: sex, weight: 0.5, fontSize: 10 });
+  if (opts.showVarsta && varsta) cols.push({ label: "VARSTA", value: String(varsta), weight: 0.7, fontSize: 10 });
+  cols.push({ label: "CNP", value: cartState.cnp || "—", weight: 1.9, fontSize: 9 });
+
+  // Compute column widths proportionally
+  var contentWidth = pageWidth - 2 * margin;
+  var totalWeight = cols.reduce(function(a, c) { return a + c.weight; }, 0);
+  var colWidths = cols.map(function(c) { return (c.weight / totalWeight) * contentWidth; });
+
+  // Headers row
+  var x = margin;
+  for (var i = 0; i < cols.length; i++) {
+    doc.text(cols[i].label, x, y);
+    x += colWidths[i];
+  }
+  y += 4;
+
+  // Values row
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(15, 17, 23);
+  x = margin;
+  for (var j = 0; j < cols.length; j++) {
+    var val = s(cols[j].value);
+    doc.setFontSize(cols[j].fontSize || 10);
+    // Width-aware truncation: measure text and shrink-with-ellipsis if needed
+    var maxWidth = colWidths[j] - 2;  // small gap between cols
+    var textWidth = doc.getTextWidth(val);
+    if (textWidth > maxWidth && val.length > 4) {
+      // Trim chars from end until it fits with "…"
+      while (val.length > 4 && doc.getTextWidth(val + "…") > maxWidth) {
+        val = val.slice(0, -1);
+      }
+      val = val + "…";
+    }
+    doc.text(val, x, y);
+    x += colWidths[j];
+  }
+  y += 6;
+
+  // Faint separator
+  doc.setDrawColor(220, 215, 200);
+  doc.setLineWidth(0.2);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 4;
+
+  return y;
+}
+
+// ────────────────────────────────────────────────────────────────
+// PDF 1: Buletin RECOLTARE (internal, with tubes + lab routing)
+// ────────────────────────────────────────────────────────────────
+
+function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  var pageWidth = doc.internal.pageSize.getWidth();
+  var pageHeight = doc.internal.pageSize.getHeight();
+  var margin = 15;
+  var contentWidth = pageWidth - 2 * margin;
+  var s = pdfStripDiacritics;
+  var SAFE_BOTTOM = pageHeight - 12;  // reserve 12mm for page-number footer
+
+  var y = pdfClinicHeader(doc, pageWidth, margin);
+
+  // ---- Title + cod cerere ----
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.setTextColor(15, 17, 23);
+  doc.text("CERERE ANALIZE", margin, y);
+  if (numarOrdine) {
+    doc.setFontSize(11);
+    doc.setTextColor(184, 151, 58);
+    doc.text("COD CERERE: #" + numarOrdine, pageWidth - margin, y, { align: "right" });
+  }
+  y += 5;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  var dataCerere = pdfTodayDDMMYYYY();
+  var ora = new Date().toTimeString().substr(0, 5);
+  doc.text("Data cerere: " + dataCerere + " " + ora, margin, y);
+  doc.text("Data recoltare: " + pdfFormatDateISO(dataRecoltareISO), pageWidth - margin, y, { align: "right" });
+  y += 5;
+  if (cartState.numeMedic) {
+    doc.text("Medic: " + s(cartState.numeMedic), margin, y);
+    y += 5;
+  }
+  y += 2;
+
+  // ---- Patient block ----
+  y = pdfPatientBlock(doc, r, { showSex: true, showVarsta: true }, y, pageWidth, margin);
+
+  // ---- Analize table ----
+  // Use TOP-OF-ROW paradigm: `y` is the top of the next row to draw.
+  // Text baseline is placed at (y + rowBL) so first row's ascenders never
+  // overlap the dark header strip (otherwise text top can intrude).
+  var rowH = 6;       // height of each row
+  var rowBL = 4.2;    // baseline offset from row top
+  var headerGap = 2.5;  // extra gap between header strip and first row
+
+  function drawTableHeader() {
+    doc.setFillColor(15, 17, 23);
+    doc.rect(margin, y, contentWidth, 6, "F");
+    doc.setTextColor(184, 151, 58);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.text("Denumire", margin + 2, y + rowBL);
+    doc.text("Laborator", margin + 95, y + rowBL);
+    doc.text("Cant.", margin + 130, y + rowBL);
+    doc.text("Termen", margin + 145, y + rowBL);
+    doc.text("Pret", pageWidth - margin - 2, y + rowBL, { align: "right" });
+    y += 6 + headerGap;
+  }
+
+  // Section title "ANALIZE"
+  function ensureSpace(needed) {
+    if (y + needed > SAFE_BOTTOM) {
+      doc.addPage();
+      y = margin;
+      return true;
+    }
+    return false;
+  }
+
+  ensureSpace(16);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(184, 151, 58);
+  doc.text("ANALIZE", margin, y);
+  y += 4;
+
+  drawTableHeader();
+
+  // Iterate rows: y is TOP of current row; text baselines are at y + rowBL
+  for (var i = 0; i < r.items.length; i++) {
+    if (y + rowH > SAFE_BOTTOM) {
+      doc.addPage();
+      y = margin;
+      drawTableHeader();
+    }
+    var it = r.items[i];
+    // Alternating row background — full row height covers from top
+    if (i % 2 === 1) {
+      doc.setFillColor(248, 246, 241);
+      doc.rect(margin, y, contentWidth, rowH, "F");
+    }
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(15, 17, 23);
+    doc.text(s(it.displayName), margin + 2, y + rowBL);
+    doc.setFontSize(8);
+    doc.text(s(it.offer.Laborator), margin + 95, y + rowBL);
+    doc.text("1", margin + 130, y + rowBL);
+    var timp = (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : "";
+    doc.text(s(timp), margin + 145, y + rowBL);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text(Number(it.finalPrice).toFixed(0), pageWidth - margin - 2, y + rowBL, { align: "right" });
+    y += rowH;
+  }
+
+  // ---- Total row ----
+  ensureSpace(14);
+  y += 1;
+  doc.setDrawColor(15, 17, 23);
+  doc.setLineWidth(0.4);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.text("Total", margin, y);
+  doc.text(Number(r.grandTotal).toFixed(0) + " RON", pageWidth - margin, y, { align: "right" });
+  y += 10;
+
+  // ---- Eprubete necesare ----
+  var eprubete = buildEprubetSummary(r.items);
+  if (eprubete.length > 0) {
+    ensureSpace(12);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(184, 151, 58);
+    doc.text("EPRUBETE NECESARE", margin, y);
+    y += 5;
+    doc.setTextColor(15, 17, 23);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+
+    for (var k = 0; k < eprubete.length; k++) {
+      var e = eprubete[k];
+      var locs = Object.keys(e.breakdown || {});
+      // Estimate height of this group: title (4.5mm) + each breakdown line (4mm) + gap (2mm)
+      var groupHeight = 4.5 + locs.length * 4 + 2;
+      // Try to keep the whole group on one page
+      if (y + groupHeight > SAFE_BOTTOM) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(15, 17, 23);
+      doc.text(e.count + "x  " + s(e.tip), margin + 2, y);
+      y += 4.5;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(80, 80, 80);
+      for (var li = 0; li < locs.length; li++) {
+        // Per-line safety: if it really doesn't fit, page break (rare case)
+        if (y + 4 > SAFE_BOTTOM) {
+          doc.addPage();
+          y = margin;
+        }
+        var locname = locs[li];
+        var cnt = e.breakdown[locname];
+        doc.text("    " + cnt + "x  -  " + s(locname), margin + 4, y);
+        y += 4;
+      }
+      y += 2;
+    }
+  }
+
+  // Footer page numbers
+  var pageCount = doc.internal.getNumberOfPages();
+  for (var p = 1; p <= pageCount; p++) {
+    doc.setPage(p);
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Pagina " + p + " din " + pageCount, pageWidth - margin, pageHeight - 6, { align: "right" });
+  }
+
+  // Save
+  var fullName = (cartState.prenume.trim() + "_" + cartState.nume.trim())
+    .replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "");
+  var codStr = numarOrdine ? "_" + numarOrdine : "";
+  doc.save("Buletin_recoltare_" + fullName + codStr + ".pdf");
+}
+
+// ────────────────────────────────────────────────────────────────
+// PDF 2: Buletin SERVICII (for client — no tubes/labs detail)
+// ────────────────────────────────────────────────────────────────
+
+function exportBuletinServicii(r, numarOrdine, dataRecoltareISO) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  var pageWidth = doc.internal.pageSize.getWidth();
+  var pageHeight = doc.internal.pageSize.getHeight();
+  var margin = 15;
+  var contentWidth = pageWidth - 2 * margin;
+  var s = pdfStripDiacritics;
+
+  var y = pdfClinicHeader(doc, pageWidth, margin);
+
+  // Title + cod cerere
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.setTextColor(15, 17, 23);
+  doc.text("BULETIN SERVICII", margin, y);
+  if (numarOrdine) {
+    doc.setFontSize(11);
+    doc.setTextColor(184, 151, 58);
+    doc.text("COD CERERE: #" + numarOrdine, pageWidth - margin, y, { align: "right" });
+  }
+  y += 5;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  doc.text("Data cerere: " + pdfTodayDDMMYYYY(), margin, y);
+  var medicTxt = "Medic: " + (cartState.numeMedic ? s(cartState.numeMedic) : "FARA TRIMITERE");
+  doc.text(medicTxt, pageWidth - margin, y, { align: "right" });
+  y += 7;
+
+  // Patient block
+  y = pdfPatientBlock(doc, r, { showSex: true, showVarsta: true }, y, pageWidth, margin);
+
+  // ---- Helpers for pagination + table layout (top-of-row paradigm) ----
+  var SAFE_BOTTOM = pageHeight - 12;
+  var rowH = 6;
+  var rowBL = 4.2;
+  var headerGap = 2.5;
+
+  function drawServiciiHeader() {
+    doc.setFillColor(15, 17, 23);
+    doc.rect(margin, y, contentWidth, 6, "F");
+    doc.setTextColor(184, 151, 58);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.text("Denumire analiza", margin + 2, y + rowBL);
+    doc.text("Termen executie", margin + 110, y + rowBL);
+    doc.text("Pret (RON)", pageWidth - margin - 2, y + rowBL, { align: "right" });
+    y += 6 + headerGap;
+  }
+
+  drawServiciiHeader();
+
+  for (var i = 0; i < r.items.length; i++) {
+    if (y + rowH > SAFE_BOTTOM) {
+      doc.addPage();
+      y = margin;
+      drawServiciiHeader();
+    }
+    var it = r.items[i];
+    if (i % 2 === 1) {
+      doc.setFillColor(248, 246, 241);
+      doc.rect(margin, y, contentWidth, rowH, "F");
+    }
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(15, 17, 23);
+    doc.text(s(it.displayName), margin + 2, y + rowBL);
+    doc.setFontSize(8);
+    var timp = (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : "";
+    var execDate = pdfExecutionDate(timp);
+    var timpFull = timp + (execDate ? " (" + execDate + ")" : "");
+    doc.text(s(timpFull), margin + 110, y + rowBL);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text(Number(it.finalPrice).toFixed(0), pageWidth - margin - 2, y + rowBL, { align: "right" });
+    y += rowH;
+  }
+
+  // Total — needs ~20mm for total + 2 footer lines
+  if (y + 20 > SAFE_BOTTOM) { doc.addPage(); y = margin; }
+  y += 2;
+  doc.setDrawColor(15, 17, 23);
+  doc.setLineWidth(0.4);
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.text("Total de plata", margin, y);
+  doc.text(Number(r.grandTotal).toFixed(0) + " RON", pageWidth - margin, y, { align: "right" });
+  y += 6;
+
+  // Footer note: bon fiscal + verificati datele
+  if (y + 10 > SAFE_BOTTOM) { doc.addPage(); y = margin; }
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "italic");
+  doc.setTextColor(120, 120, 120);
+  y += 4;
+  doc.text(s("Va rugam solicitati bonul fiscal pentru suma achitata."), margin, y);
+  y += 4;
+  doc.text(s("Verificati datele inscrise pe acest buletin la receptie."), margin, y);
+
+  var pageCount = doc.internal.getNumberOfPages();
+  for (var p = 1; p <= pageCount; p++) {
+    doc.setPage(p);
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Pagina " + p + " din " + pageCount, pageWidth - margin, pageHeight - 6, { align: "right" });
+  }
+
+  var fullName = (cartState.prenume.trim() + "_" + cartState.nume.trim())
+    .replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "");
+  var codStr = numarOrdine ? "_" + numarOrdine : "";
+  doc.save("Buletin_servicii_" + fullName + codStr + ".pdf");
+}
+
+// ────────────────────────────────────────────────────────────────
+// PDF 3: GDPR consent (pre-filled patient details + ticked DA boxes)
+// ────────────────────────────────────────────────────────────────
+
+function exportGdprConsent(r) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  var pageWidth = doc.internal.pageSize.getWidth();
+  var pageHeight = doc.internal.pageSize.getHeight();
+  var margin = 15;
+  var contentWidth = pageWidth - 2 * margin;
+  var s = pdfStripDiacritics;
+
+  var y = pdfClinicHeader(doc, pageWidth, margin);
+
+  // Title — purple band like in sample
+  doc.setFillColor(232, 230, 252);
+  doc.rect(margin, y, contentWidth, 16, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(15, 17, 23);
+  doc.text("CONSIMTAMANT INFORMAT PRIVIND ACORDUL", pageWidth / 2, y + 6, { align: "center" });
+  doc.text("PRELUCRARII DATELOR CU CARACTER PERSONAL", pageWidth / 2, y + 11, { align: "center" });
+  y += 21;
+
+  // Patient pre-fill block
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(120, 120, 120);
+  var fullName = [cartState.prenume.trim(), cartState.nume.trim()].filter(Boolean).join(" ");
+  var dn = cartState.dataNasterii || dataNasteriiFromCnp(cartState.cnp);
+
+  // Box around patient info
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.3);
+  doc.roundedRect(margin, y, contentWidth, 18, 1, 1);
+
+  doc.text("NUME / PRENUME", margin + 3, y + 4);
+  doc.text("CNP", margin + 90, y + 4);
+  doc.text("DATA NASTERII", margin + 130, y + 4);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(15, 17, 23);
+  doc.text(s(fullName) || "—", margin + 3, y + 10);
+  doc.text(cartState.cnp || "—", margin + 90, y + 10);
+  doc.text(dn || "—", margin + 130, y + 10);
+
+  if (cartState.email || cartState.telefonNumar) {
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(120, 120, 120);
+    doc.text("EMAIL", margin + 3, y + 14);
+    doc.text("TELEFON", margin + 90, y + 14);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(15, 17, 23);
+    if (cartState.email) doc.text(s(cartState.email), margin + 17, y + 14);
+    if (cartState.telefonNumar) doc.text(cartState.telefonPrefix + " " + cartState.telefonNumar, margin + 105, y + 14);
+  }
+  y += 22;
+
+  // Body text
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(15, 17, 23);
+
+  var SAFE_BOTTOM = pageHeight - 12;
+
+  var paragraphs = [
+    "Conform cerintelor Regulamentului European 2016/679 privind protectia persoanelor fizice referitor la prelucrarea datelor cu caracter personal si libera circulatie a acestor date (\"GDPR\"), Clinica Central SRL are obligatia de a administra in conditii de siguranta si numai pentru scopurile specificate, datele personale pe care ni le furnizati despre dumneavoastra, un membru al familiei dumneavoastra, ori o alta persoana.",
+    "Aplicam masurile tehnice si organizatorice adecvate pentru protejarea datelor cu caracter personal impotriva distrugerii accidentale sau ilegale, pierderii, modificarii, dezvaluirii sau accesului neautorizat. Clinica Central SRL a luat masurile de securitate conform Ordinului nr. 52/2002 privind aprobarea Cerintelor minime de securitate a prelucrarilor de date cu caracter personal.",
+    "Se recomanda sa furnizati si sa ne acordati datele solicitate, scopul inregistrarii si prelucrarii lor este necesar, in conformitate cu prevederile legale in vigoare, pentru diagnosticare, interpretare si tratament, istoric medical, acordarea de servicii medicale, la generarea de referinte medicale, scop statistic si informativ catre medicul curant, raportari la Casele de Asigurari de Sanatate locala, sau alte organisme autorizate prin lege.",
+    "Refuzul dvs. determina imposibilitatea acordarii de servicii medicale, de diagnosticare sau interpretare rezultate, de a beneficia de investigatii decontate de Casele de Sanatate, starea dvs. de sanatate putand avea de suferit.",
+    "Conform Regulamentului beneficiati de dreptul de acces, de interventie asupra datelor, dreptul de a nu fi supus unei decizii individuale si dreptul de a va adresa justitiei. Totodata, aveti dreptul sa va opuneti prelucrarii datelor personale care va privesc si sa solicitati stergerea acestora. Pentru exercitarea acestor drepturi, va puteti adresa cu o cerere scrisa, datata si semnata catre Clinica Central SRL. Datele dvs. nu vor fi transferate in alte state.",
+    "Date cu caracter personal: nume si prenume, CNP, data nasterii, sexul, cetatenia, date din actele de identitate, adresa, profesia, situatie familiala, date privind starea de sanatate."
+  ];
+
+  for (var i = 0; i < paragraphs.length; i++) {
+    var lines = doc.splitTextToSize(s(paragraphs[i]), contentWidth);
+    var blockHeight = lines.length * 4 + 2;
+    if (y + blockHeight > SAFE_BOTTOM) { doc.addPage(); y = margin; }
+    doc.text(lines, margin, y);
+    y += blockHeight;
+  }
+
+  y += 3;
+
+  // 5 consent rows with pre-ticked DA — each row needs ~9mm (separator + label + box)
+  var consents = [
+    "Accept prelucrarea datelor cu caracter personal in vederea efectuarii serviciilor medicale",
+    "Accept colectarea adresei de email pentru trimiterea rezultatelor pe email",
+    "Accept colectarea adresei de email pentru trimiterea de oferte si materiale promotionale",
+    "Accept colectarea numarului de telefon pentru notificare prin SMS",
+    "Accept trimiterea informatiilor medicale catre medicul curant (e-mail sau on-line)"
+  ];
+
+  doc.setDrawColor(150, 150, 150);
+  doc.setLineWidth(0.2);
+
+  for (var c = 0; c < consents.length; c++) {
+    // Each row needs 9mm; reserve also signature block (~32mm) to stay on same page if possible
+    var needed = (c === 0 ? 9 + 32 : 9);
+    if (y + needed > SAFE_BOTTOM) { doc.addPage(); y = margin; }
+    doc.line(margin, y, pageWidth - margin, y);
+    y += 5;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text(s(consents[c]) + ":", margin, y);
+
+    // DA checkbox (ticked) + NU checkbox (empty)
+    var boxSize = 4;
+    var daX = pageWidth - margin - 26;
+    var nuX = pageWidth - margin - 12;
+
+    doc.setFont("helvetica", "normal");
+    doc.text("DA", daX - 4, y);
+    // Ticked box
+    doc.setDrawColor(15, 17, 23);
+    doc.setLineWidth(0.3);
+    doc.rect(daX, y - 3, boxSize, boxSize);
+    // Tick mark
+    doc.setLineWidth(0.5);
+    doc.line(daX + 0.7, y - 1, daX + 1.6, y - 0.2);
+    doc.line(daX + 1.6, y - 0.2, daX + 3.3, y - 2.5);
+
+    doc.text("NU", nuX - 4, y);
+    doc.rect(nuX, y - 3, boxSize, boxSize);
+
+    y += 4;
+  }
+  doc.line(margin, y, pageWidth - margin, y);
+  y += 8;
+
+  // Signature block (~32mm needed: data + 4 rows of 6mm)
+  if (y + 32 > SAFE_BOTTOM) { doc.addPage(); y = margin; }
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(15, 17, 23);
+  doc.text("Data: " + pdfTodayDDMMYYYY(), margin, y);
+
+  var rightX = pageWidth - margin - 80;
+  doc.text("Nume / Prenume: " + s(fullName), rightX, y);
+  y += 6;
+  doc.text("Imputernicit: ___________________________", rightX, y);
+  y += 6;
+  doc.text("Apartinator: ____________________________", rightX, y);
+  y += 6;
+  doc.text("Semnatura: ______________________________", rightX, y);
+
+  var fullN = (cartState.prenume.trim() + "_" + cartState.nume.trim())
+    .replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "");
+  doc.save("Consimtamant_GDPR_" + fullN + ".pdf");
 }

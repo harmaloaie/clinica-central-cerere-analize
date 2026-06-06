@@ -1,6 +1,6 @@
 # Clinica Central — Aplicatie analize
 
-Aplicatie web pentru Clinica Central Pitesti. Permite construirea de **cereri de analize pentru pacienti** (cu CNP) si **explorarea preturilor** din 6 laboratoare: Clinica Sante, Binisan, Derzelius, Medilab, Poliana, Solomed (6.115 analize total).
+Aplicatie web pentru Clinica Central Pitesti. Permite construirea de **cereri de analize pentru pacienti** (cu CNP) si **explorarea preturilor** din 6 laboratoare: Clinica Sante, Binisan, Derzelius, Medilab, Poliana, Solomed (6.115 analize total). 
 
 ## Functionalitati
 
