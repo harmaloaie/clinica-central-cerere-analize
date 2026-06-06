@@ -4679,8 +4679,7 @@ function exportBuletinServicii(r, numarOrdine, dataRecoltareISO) {
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
     doc.text("Denumire analiza", margin + 2, y + rowBL);
-    doc.text("Laborator", margin + 95, y + rowBL);
-    doc.text("Termen executie", margin + 130, y + rowBL);
+    doc.text("Termen executie", margin + 110, y + rowBL);
     doc.text("Pret (RON)", pageWidth - margin - 2, y + rowBL, { align: "right" });
     y += 6 + headerGap;
   }
@@ -4703,11 +4702,10 @@ function exportBuletinServicii(r, numarOrdine, dataRecoltareISO) {
     doc.setTextColor(15, 17, 23);
     doc.text(s(it.displayName), margin + 2, y + rowBL);
     doc.setFontSize(8);
-    doc.text(s(it.offer.Laborator), margin + 95, y + rowBL);
     var timp = (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : "";
     var execDate = pdfExecutionDate(timp);
     var timpFull = timp + (execDate ? " (" + execDate + ")" : "");
-    doc.text(s(timpFull), margin + 130, y + rowBL);
+    doc.text(s(timpFull), margin + 110, y + rowBL);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
     doc.text(Number(it.finalPrice).toFixed(0), pageWidth - margin - 2, y + rowBL, { align: "right" });
