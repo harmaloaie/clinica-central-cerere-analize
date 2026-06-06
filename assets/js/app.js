@@ -4386,13 +4386,14 @@ function pdfPatientBlock(doc, r, opts, startY, pageWidth, margin) {
   doc.setTextColor(120, 120, 120);
 
   // Columns: Nume / Email / Telefon / Sex / Varsta / CNP — but only show what we have
+  // Weights tuned so email (usually longest) gets enough room.
   var cols = [];
-  cols.push({ label: "PACIENT", value: fullName || "—", weight: 3.2 });
-  if (cartState.email) cols.push({ label: "EMAIL", value: cartState.email, weight: 2.2 });
-  if (cartState.telefonNumar) cols.push({ label: "TELEFON", value: cartState.telefonPrefix + " " + cartState.telefonNumar, weight: 2 });
-  if (opts.showSex && sex) cols.push({ label: "SEX", value: sex, weight: 0.7 });
-  if (opts.showVarsta && varsta) cols.push({ label: "VARSTA", value: String(varsta), weight: 0.9 });
-  cols.push({ label: "CNP", value: cartState.cnp || "—", weight: 2 });
+  cols.push({ label: "PACIENT", value: fullName || "—", weight: 2.6, fontSize: 10 });
+  if (cartState.email) cols.push({ label: "EMAIL", value: cartState.email, weight: 3.4, fontSize: 9 });
+  if (cartState.telefonNumar) cols.push({ label: "TELEFON", value: cartState.telefonPrefix + " " + cartState.telefonNumar, weight: 1.8, fontSize: 9 });
+  if (opts.showSex && sex) cols.push({ label: "SEX", value: sex, weight: 0.5, fontSize: 10 });
+  if (opts.showVarsta && varsta) cols.push({ label: "VARSTA", value: String(varsta), weight: 0.7, fontSize: 10 });
+  cols.push({ label: "CNP", value: cartState.cnp || "—", weight: 1.9, fontSize: 9 });
 
   // Compute column widths proportionally
   var contentWidth = pageWidth - 2 * margin;
@@ -4408,15 +4409,22 @@ function pdfPatientBlock(doc, r, opts, startY, pageWidth, margin) {
   y += 4;
 
   // Values row
-  doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(15, 17, 23);
   x = margin;
   for (var j = 0; j < cols.length; j++) {
     var val = s(cols[j].value);
-    // Truncate long values to fit column width
-    var maxChars = Math.floor(colWidths[j] / 1.8);
-    if (val.length > maxChars) val = val.substring(0, maxChars - 1) + "…";
+    doc.setFontSize(cols[j].fontSize || 10);
+    // Width-aware truncation: measure text and shrink-with-ellipsis if needed
+    var maxWidth = colWidths[j] - 2;  // small gap between cols
+    var textWidth = doc.getTextWidth(val);
+    if (textWidth > maxWidth && val.length > 4) {
+      // Trim chars from end until it fits with "…"
+      while (val.length > 4 && doc.getTextWidth(val + "…") > maxWidth) {
+        val = val.slice(0, -1);
+      }
+      val = val + "…";
+    }
     doc.text(val, x, y);
     x += colWidths[j];
   }
@@ -4477,19 +4485,25 @@ function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
   y = pdfPatientBlock(doc, r, { showSex: true, showVarsta: true }, y, pageWidth, margin);
 
   // ---- Analize table ----
-  // Helper: draws table header at current y. Used both initially and when paginating.
+  // Use TOP-OF-ROW paradigm: `y` is the top of the next row to draw.
+  // Text baseline is placed at (y + rowBL) so first row's ascenders never
+  // overlap the dark header strip (otherwise text top can intrude).
+  var rowH = 6;       // height of each row
+  var rowBL = 4.2;    // baseline offset from row top
+  var headerGap = 2.5;  // extra gap between header strip and first row
+
   function drawTableHeader() {
     doc.setFillColor(15, 17, 23);
     doc.rect(margin, y, contentWidth, 6, "F");
     doc.setTextColor(184, 151, 58);
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.text("Denumire", margin + 2, y + 4);
-    doc.text("Laborator", margin + 95, y + 4);
-    doc.text("Cant.", margin + 130, y + 4);
-    doc.text("Termen", margin + 145, y + 4);
-    doc.text("Pret", pageWidth - margin - 2, y + 4, { align: "right" });
-    y += 8;
+    doc.text("Denumire", margin + 2, y + rowBL);
+    doc.text("Laborator", margin + 95, y + rowBL);
+    doc.text("Cant.", margin + 130, y + rowBL);
+    doc.text("Termen", margin + 145, y + rowBL);
+    doc.text("Pret", pageWidth - margin - 2, y + rowBL, { align: "right" });
+    y += 6 + headerGap;
   }
 
   // Section title "ANALIZE"
@@ -4502,7 +4516,7 @@ function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
     return false;
   }
 
-  ensureSpace(14);  // title + first row
+  ensureSpace(16);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.setTextColor(184, 151, 58);
@@ -4510,37 +4524,33 @@ function exportBuletinRecoltare(r, numarOrdine, dataRecoltareISO) {
   y += 4;
 
   drawTableHeader();
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(15, 17, 23);
 
-  // Iterate rows with strict pagination — re-draw table header on each new page
+  // Iterate rows: y is TOP of current row; text baselines are at y + rowBL
   for (var i = 0; i < r.items.length; i++) {
-    var rowHeight = 6;
-    if (y + rowHeight > SAFE_BOTTOM) {
+    if (y + rowH > SAFE_BOTTOM) {
       doc.addPage();
       y = margin;
       drawTableHeader();
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.setTextColor(15, 17, 23);
     }
     var it = r.items[i];
+    // Alternating row background — full row height covers from top
     if (i % 2 === 1) {
       doc.setFillColor(248, 246, 241);
-      doc.rect(margin, y - 4, contentWidth, 6, "F");
+      doc.rect(margin, y, contentWidth, rowH, "F");
     }
-    doc.text(s(it.displayName), margin + 2, y);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(15, 17, 23);
+    doc.text(s(it.displayName), margin + 2, y + rowBL);
     doc.setFontSize(8);
-    doc.text(s(it.offer.Laborator), margin + 95, y);
-    doc.text("1", margin + 130, y);
+    doc.text(s(it.offer.Laborator), margin + 95, y + rowBL);
+    doc.text("1", margin + 130, y + rowBL);
     var timp = (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : "";
-    doc.text(s(timp), margin + 145, y);
+    doc.text(s(timp), margin + 145, y + rowBL);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
-    doc.text(Number(it.finalPrice).toFixed(0), pageWidth - margin - 2, y, { align: "right" });
-    doc.setFont("helvetica", "normal");
-    y += 6;
+    doc.text(Number(it.finalPrice).toFixed(0), pageWidth - margin - 2, y + rowBL, { align: "right" });
+    y += rowH;
   }
 
   // ---- Total row ----
@@ -4656,54 +4666,52 @@ function exportBuletinServicii(r, numarOrdine, dataRecoltareISO) {
   // Patient block
   y = pdfPatientBlock(doc, r, { showSex: true, showVarsta: true }, y, pageWidth, margin);
 
-  // ---- Helpers for pagination ----
+  // ---- Helpers for pagination + table layout (top-of-row paradigm) ----
   var SAFE_BOTTOM = pageHeight - 12;
+  var rowH = 6;
+  var rowBL = 4.2;
+  var headerGap = 2.5;
+
   function drawServiciiHeader() {
     doc.setFillColor(15, 17, 23);
     doc.rect(margin, y, contentWidth, 6, "F");
     doc.setTextColor(184, 151, 58);
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.text("Denumire analiza", margin + 2, y + 4);
-    doc.text("Laborator", margin + 95, y + 4);
-    doc.text("Termen executie", margin + 130, y + 4);
-    doc.text("Pret (RON)", pageWidth - margin - 2, y + 4, { align: "right" });
-    y += 8;
+    doc.text("Denumire analiza", margin + 2, y + rowBL);
+    doc.text("Laborator", margin + 95, y + rowBL);
+    doc.text("Termen executie", margin + 130, y + rowBL);
+    doc.text("Pret (RON)", pageWidth - margin - 2, y + rowBL, { align: "right" });
+    y += 6 + headerGap;
   }
 
   drawServiciiHeader();
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(15, 17, 23);
-
   for (var i = 0; i < r.items.length; i++) {
-    var rowHeight = 6;
-    if (y + rowHeight > SAFE_BOTTOM) {
+    if (y + rowH > SAFE_BOTTOM) {
       doc.addPage();
       y = margin;
       drawServiciiHeader();
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      doc.setTextColor(15, 17, 23);
     }
     var it = r.items[i];
     if (i % 2 === 1) {
       doc.setFillColor(248, 246, 241);
-      doc.rect(margin, y - 4, contentWidth, 6, "F");
+      doc.rect(margin, y, contentWidth, rowH, "F");
     }
-    doc.text(s(it.displayName), margin + 2, y);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(15, 17, 23);
+    doc.text(s(it.displayName), margin + 2, y + rowBL);
     doc.setFontSize(8);
-    doc.text(s(it.offer.Laborator), margin + 95, y);
+    doc.text(s(it.offer.Laborator), margin + 95, y + rowBL);
     var timp = (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : "";
     var execDate = pdfExecutionDate(timp);
     var timpFull = timp + (execDate ? " (" + execDate + ")" : "");
-    doc.text(s(timpFull), margin + 130, y);
+    doc.text(s(timpFull), margin + 130, y + rowBL);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
-    doc.text(Number(it.finalPrice).toFixed(0), pageWidth - margin - 2, y, { align: "right" });
-    doc.setFont("helvetica", "normal");
-    y += 6;
+    doc.text(Number(it.finalPrice).toFixed(0), pageWidth - margin - 2, y + rowBL, { align: "right" });
+    y += rowH;
   }
 
   // Total — needs ~20mm for total + 2 footer lines
