@@ -69,6 +69,49 @@ function getDetails(lab, denumire) {
   if (!map) return null;
   return map[normName(denumire)] || null;
 }
+
+// Pret Clinica Central (catalog propriu) — keyed by normalized name
+var PRETURI_CC = window.__PRETURI_CC__ || {};
+function getCCPrice(denumire) {
+  var p = PRETURI_CC[normName(denumire)];
+  return (typeof p === "number") ? p : null;
+}
+// Effective price = pret CC if available, else lab discounted price + 5% markup.
+// Used for the FINAL report (modal + Excel + JSON + Istoric) so we charge
+// our own catalog price; lab pricing stays visible only in cart for comparison.
+function effectivePrice(denumire, laborator, pretLista) {
+  var cc = getCCPrice(denumire);
+  if (cc !== null) return { price: cc, source: "cc" };
+  // Fallback: discounted lab price + 5%
+  var discounted = finalPrice(pretLista, laborator);
+  return { price: Math.round(discounted * 1.05 * 100) / 100, source: "lab+5%" };
+}
+
+// Cached base64 representation of the topbar logo, used for PDF exports.
+// We convert via canvas once, then reuse. Returns { dataUrl, w, h } or null if unavailable.
+var __LOGO_CACHE__ = null;
+function getLogoForPdf() {
+  if (__LOGO_CACHE__) return __LOGO_CACHE__;
+  try {
+    var img = document.querySelector(".topbar-logo");
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    var canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    var ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    __LOGO_CACHE__ = {
+      dataUrl: canvas.toDataURL("image/jpeg", 0.92),
+      w: img.naturalWidth,
+      h: img.naturalHeight
+    };
+    return __LOGO_CACHE__;
+  } catch (e) {
+    console.warn("[getLogoForPdf] cannot read logo:", e);
+    return null;
+  }
+}
+
 function fmtRecipient(d) {
   if (!d) return "";
   var parts = [];
@@ -151,6 +194,10 @@ function switchView(name) {
   document.getElementById("viewCart").style.display = (name === "cart") ? "block" : "none";
   document.getElementById("viewBrowse").style.display = (name === "browse") ? "block" : "none";
   document.getElementById("viewIstoric").style.display = (name === "istoric") ? "block" : "none";
+  var bordEl = document.getElementById("viewBorderouri");
+  if (bordEl) bordEl.style.display = (name === "borderouri") ? "block" : "none";
+  var adminEl = document.getElementById("viewAdmin");
+  if (adminEl) adminEl.style.display = (name === "admin") ? "block" : "none";
   var tabs = document.querySelectorAll(".topbar-tab");
   for (var i = 0; i < tabs.length; i++) {
     var t = tabs[i];
@@ -160,7 +207,6 @@ function switchView(name) {
   }
   if (name === "cart") {
     if (!cartState.pacientValid) {
-      // Focus first empty required field
       if (!cartState.prenumeValid) prenumeInput.focus();
       else if (!cartState.numeValid) numeInput.focus();
       else cnpInput.focus();
@@ -170,8 +216,11 @@ function switchView(name) {
   } else if (name === "browse") {
     document.getElementById("q").focus();
   } else if (name === "istoric") {
-    // Auto-load on first switch to istoric (and refresh data each time)
     if (typeof loadIstoric === "function") loadIstoric();
+  } else if (name === "borderouri") {
+    if (typeof loadBorderouri === "function") loadBorderouri();
+  } else if (name === "admin") {
+    if (typeof loadAdminPreturi === "function") loadAdminPreturi();
   }
 }
 var tabs = document.querySelectorAll(".topbar-tab");
@@ -590,7 +639,13 @@ function doCartSearch() {
     html += '</div></div>';
     html += '<div style="display:flex;align-items:center;gap:14px">';
     html += '<div class="suggestion-add-hint">+ Adauga</div>';
+    html += '<div class="suggestion-prices">';
     html += '<div class="suggestion-price">' + fp + '<small>' + (disc > 0 ? "cu " + disc + "% disc" : "RON") + '</small></div>';
+    var ccp = getCCPrice(r.Denumire);
+    if (ccp !== null) {
+      html += '<div class="suggestion-price-cc" title="Pret Clinica Central">' + ccp.toFixed(0) + '<small>CC</small></div>';
+    }
+    html += '</div>';
     html += '</div></div>';
   }
   cartSuggestionsEl.innerHTML = html;
@@ -682,6 +737,10 @@ function renderCart() {
     html += '<div class="cart-item-price">' + fp + ' RON</div>';
     if (disc > 0) {
       html += '<div class="cart-item-price-orig">' + offer.Pret.toFixed(0) + ' RON</div>';
+    }
+    var ccp = getCCPrice(c.displayName);
+    if (ccp !== null) {
+      html += '<div class="cart-item-price-cc" title="Pret Clinica Central">CC: ' + ccp.toFixed(0) + ' RON</div>';
     }
     html += '<button class="cart-item-remove" data-key="' + esc(c.key) + '" data-lab="' + esc(lab) + '" title="Sterge">&times;</button>';
     html += '</div></div>';
@@ -798,14 +857,19 @@ function buildReport() {
   for (var i = 0; i < cartState.cart.length; i++) {
     var c = cartState.cart[i];
     if (!c.offer) continue;
-    var fp = finalPrice(c.offer.Pret, c.offer.Laborator);
-    grandTotal += fp;
+    // Reference: lab pricing (kept for comparison)
+    var labFinal = finalPrice(c.offer.Pret, c.offer.Laborator);
+    // OFFICIAL price for the report = Clinica Central pricing (CC catalog or lab+5%)
+    var eff = effectivePrice(c.displayName, c.offer.Laborator, c.offer.Pret);
+    grandTotal += eff.price;
     grandListTotal += c.offer.Pret;
     items.push({
       key: c.key,
       displayName: c.displayName,
       offer: c.offer,
-      finalPrice: fp,
+      finalPrice: eff.price,       // CC price (or lab+5% fallback) — used everywhere downstream
+      labFinalPrice: labFinal,     // Kept for reference if needed
+      priceSource: eff.source,     // "cc" or "lab+5%"
       discount: discPct(c.offer.Laborator)
     });
   }
@@ -828,7 +892,7 @@ function openReport() {
 
   var statsHtml = '<div class="report-stat"><span class="report-stat-num">' + r.items.length + '</span><span class="report-stat-label">Analize</span></div>';
   statsHtml += '<div class="report-stat"><span class="report-stat-num">' + r.groups.length + '</span><span class="report-stat-label">Laboratoare</span></div>';
-  statsHtml += '<div class="report-stat"><span class="report-stat-num">' + (r.grandListTotal - r.grandTotal) + '</span><span class="report-stat-label">RON economisiti</span></div>';
+  statsHtml += '<div class="report-stat"><span class="report-stat-num">' + Math.round(r.grandTotal) + '</span><span class="report-stat-label">RON total</span></div>';
   document.getElementById("reportStats").innerHTML = statsHtml;
 
   // Patient info header
@@ -908,9 +972,11 @@ function openReport() {
         body += '</div>';
       }
       body += '</div>';
-      body += '<div class="lab-group-item-price">' + it.finalPrice + ' RON';
-      if (it.discount > 0) {
-        body += '<span class="lab-group-item-price-orig">' + it.offer.Pret.toFixed(0) + ' RON</span>';
+      body += '<div class="lab-group-item-price">' + Math.round(it.finalPrice) + ' RON';
+      if (it.priceSource === "lab+5%") {
+        body += '<span class="lab-group-item-price-src" title="Nu exista pret in catalogul Clinica Central; folosit pret laborator cu discount +5%">lab + 5%</span>';
+      } else {
+        body += '<span class="lab-group-item-price-src" title="Pret din catalogul Clinica Central">CC</span>';
       }
       body += '</div></div>';
     }
@@ -923,7 +989,8 @@ function openReport() {
   body += '</div>';
 
   body += '<div class="report-actions">';
-  body += '<button class="report-btn primary" id="btnExportReport">&#11015; Export Excel</button>';
+  body += '<button class="report-btn primary" id="btnExportPdf">&#11015; Export PDF</button>';
+  body += '<button class="report-btn" id="btnExportReport">&#11015; Export Excel</button>';
   body += '<button class="report-btn" id="btnExportJson">&#11015; Export JSON</button>';
   body += '<button class="report-btn" id="btnCloseReport">Inchide</button>';
   body += '</div>';
@@ -933,6 +1000,7 @@ function openReport() {
   document.body.style.overflow = "hidden";
 
   document.getElementById("btnCloseReport").addEventListener("click", closeReport);
+  document.getElementById("btnExportPdf").addEventListener("click", function() { exportReportPdf(r); });
   document.getElementById("btnExportReport").addEventListener("click", function() { exportReportXlsx(r); });
   document.getElementById("btnExportJson").addEventListener("click", function() { exportReportJson(r); });
 
@@ -1013,19 +1081,17 @@ function exportReportXlsx(r) {
         "Se trimite la": d && d.LaboratorSubcontractant ? d.LaboratorSubcontractant : "",
         "Observatii": d && d.Observatii ? d.Observatii : "",
         "Timp Executie": it.offer.Timp !== "N/A" ? it.offer.Timp : "",
-        "Pret Lista (RON)": it.offer.Pret,
-        "Discount (%)": it.discount,
-        "Pret Final (RON)": it.finalPrice,
-        "Economie (RON)": it.offer.Pret - it.finalPrice
+        "Pret (RON)": Math.round(it.finalPrice * 100) / 100,
+        "Sursa Pret": it.priceSource === "cc" ? "Catalog Clinica Central" : "Laborator cu discount + 5%"
       });
     }
-    rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": grp.lab + " — Subtotal", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret Lista (RON)": grp.listTotal, "Discount (%)": "", "Pret Final (RON)": grp.total, "Economie (RON)": grp.listTotal - grp.total });
+    rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": grp.lab + " — Subtotal", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret (RON)": Math.round(grp.total * 100) / 100, "Sursa Pret": "" });
     rows.push({});
   }
-  rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": "TOTAL GENERAL", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret Lista (RON)": r.grandListTotal, "Discount (%)": "", "Pret Final (RON)": r.grandTotal, "Economie (RON)": r.grandListTotal - r.grandTotal });
+  rows.push({ "Pacient": "", "CNP pacient": "", "Laborator": "TOTAL GENERAL", "Denumire Analiza": "", "Eprubeta / Recipient": "", "Material biologic": "", "Cantitate": "", "Se trimite la": "", "Observatii": "", "Timp Executie": "", "Pret (RON)": Math.round(r.grandTotal * 100) / 100, "Sursa Pret": "" });
 
   var ws = XLSX.utils.json_to_sheet(rows);
-  ws["!cols"] = [{wch:22},{wch:15},{wch:22},{wch:45},{wch:34},{wch:18},{wch:14},{wch:28},{wch:40},{wch:18},{wch:14},{wch:10},{wch:14},{wch:12}];
+  ws["!cols"] = [{wch:22},{wch:15},{wch:22},{wch:45},{wch:34},{wch:18},{wch:14},{wch:28},{wch:40},{wch:18},{wch:14},{wch:24}];
   var wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Cerere analize");
 
@@ -1067,6 +1133,300 @@ function exportReportXlsx(r) {
   XLSX.writeFile(wb, fn);
 }
 
+function exportReportPdf(r) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  var pageWidth = doc.internal.pageSize.getWidth();
+  var pageHeight = doc.internal.pageSize.getHeight();
+  var margin = 15;
+  var contentWidth = pageWidth - 2 * margin;
+  var y = margin;
+
+  // Strip diacritics for Helvetica (Latin1 only)
+  function s(text) {
+    if (!text) return "";
+    return String(text).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function ensureSpace(needed) {
+    if (y + needed > pageHeight - 15) {
+      doc.addPage();
+      y = margin;
+    }
+  }
+
+  function addLine(text, opts) {
+    opts = opts || {};
+    var fontSize = opts.fontSize || 10;
+    var style = opts.style || "normal";
+    var color = opts.color || [15, 17, 23];
+    var spacing = opts.spacing || (fontSize * 0.5);
+    doc.setFontSize(fontSize);
+    doc.setFont("helvetica", style);
+    doc.setTextColor(color[0], color[1], color[2]);
+    var lines = doc.splitTextToSize(s(text), contentWidth);
+    ensureSpace(lines.length * fontSize * 0.4 + spacing);
+    doc.text(lines, margin, y);
+    y += lines.length * fontSize * 0.4 + spacing;
+  }
+
+  // ─── Header: only a small black square behind the logo, rest stays clean white ───
+  var logo = getLogoForPdf();
+  var logoBoxSize = 20;       // square box on page (slightly bigger now that it's standalone)
+  var titleX = margin;        // default: where title starts if no logo
+  if (logo) {
+    // Small black rounded square ONLY behind logo (saves ink, makes logo pop)
+    doc.setFillColor(15, 17, 23);
+    doc.roundedRect(margin, margin - 2, logoBoxSize, logoBoxSize, 2, 2, "F");
+    // Compute fit-inside dimensions preserving aspect ratio
+    var pad = 2;
+    var maxW = logoBoxSize - 2 * pad;
+    var maxH = logoBoxSize - 2 * pad;
+    var ratio = logo.w / logo.h;
+    var dw, dh;
+    if (ratio > maxW / maxH) {
+      dw = maxW; dh = maxW / ratio;
+    } else {
+      dh = maxH; dw = maxH * ratio;
+    }
+    var dx = margin + (logoBoxSize - dw) / 2;
+    var dy = (margin - 2) + (logoBoxSize - dh) / 2;
+    try {
+      doc.addImage(logo.dataUrl, "JPEG", dx, dy, dw, dh);
+    } catch (e) { /* silent fail */ }
+    titleX = margin + logoBoxSize + 6;
+  }
+
+  // Title text in black/gold next to logo (on white page background)
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(15, 17, 23);  // dark ink (text only, minimal ink)
+  doc.text("CLINICA CENTRAL", titleX, margin + 5);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(184, 151, 58); // gold subtitle
+  doc.text("Cerere analize", titleX, margin + 11);
+
+  // Top-right meta (black text on white)
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  var now = new Date();
+  doc.text("Generat: " + now.toLocaleString("ro-RO"), pageWidth - margin, margin + 5, { align: "right" });
+  doc.text("Pitesti, Romania", pageWidth - margin, margin + 10, { align: "right" });
+
+  // Thin gold rule under the entire header area
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.4);
+  doc.line(margin, margin + 20, pageWidth - margin, margin + 20);
+
+  y = margin + 26;
+
+  // ─── Pacient ───
+  var fullName = [cartState.prenume.trim(), cartState.nume.trim()].filter(Boolean).join(" ");
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(184, 151, 58);
+  doc.text("PACIENT", margin, y);
+  y += 5;
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.4);
+  doc.line(margin, y, margin + 30, y);
+  y += 4;
+
+  doc.setFontSize(10);
+  doc.setTextColor(15, 17, 23);
+  doc.setFont("helvetica", "bold");
+  doc.text(s(fullName || "—"), margin, y);
+  doc.setFont("helvetica", "normal");
+  doc.text("CNP: " + s(cartState.cnp || "—"), pageWidth - margin, y, { align: "right" });
+  y += 5;
+
+  if (cartState.email) {
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text("Email: " + s(cartState.email), margin, y);
+    y += 4;
+  }
+  if (cartState.telefonNumar) {
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text("Telefon: " + s(cartState.telefonPrefix + " " + cartState.telefonNumar), margin, y);
+    y += 4;
+  }
+  y += 4;
+
+  // ─── Stats row (ink-light: no fill, gray rules) ───
+  ensureSpace(15);
+  doc.setDrawColor(220, 217, 207);
+  doc.setLineWidth(0.3);
+  doc.line(margin, y, pageWidth - margin, y);
+  doc.line(margin, y + 12, pageWidth - margin, y + 12);
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.setFont("helvetica", "normal");
+  var col1x = margin + 2;
+  var col2x = margin + contentWidth / 2 + 2;
+  doc.text("ANALIZE", col1x, y + 4);
+  doc.text("TOTAL", col2x, y + 4);
+  doc.setFontSize(14);
+  doc.setTextColor(15, 17, 23);
+  doc.setFont("helvetica", "bold");
+  doc.text(String(r.items.length), col1x, y + 10);
+  doc.text(Math.round(r.grandTotal) + " RON", col2x, y + 10);
+  y += 18;
+
+  // ─── Eprubete summary ───
+  var eprubete = buildEprubetSummary(r.items);
+  if (eprubete.length > 0) {
+    ensureSpace(15);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(184, 151, 58);
+    doc.text("EPRUBETE NECESARE PENTRU RECOLTARE", margin, y);
+    y += 4;
+    doc.setDrawColor(184, 151, 58);
+    doc.line(margin, y, margin + 70, y);
+    y += 5;
+
+    var epBody = eprubete.map(function(item) {
+      return [String(item.count) + "x", s(item.tip)];
+    });
+    doc.autoTable({
+      body: epBody,
+      startY: y,
+      theme: "plain",
+      styles: { fontSize: 9, cellPadding: 2.5, valign: "top" },
+      columnStyles: {
+        0: { cellWidth: 14, halign: "center", fontStyle: "bold", textColor: [184, 151, 58] },
+        1: { fontStyle: "bold" }
+      },
+      didDrawCell: function(data) {
+        // Bottom hairline between rows
+        if (data.section === "body" && data.column.index === 0) {
+          doc.setDrawColor(230, 228, 220);
+          doc.setLineWidth(0.15);
+          doc.line(data.cell.x, data.cell.y + data.cell.height,
+                   pageWidth - margin, data.cell.y + data.cell.height);
+        }
+      },
+      margin: { left: margin, right: margin }
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
+  // ─── Analize per laborator ───
+  ensureSpace(15);
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(184, 151, 58);
+  doc.text("ANALIZE", margin, y);
+  y += 4;
+  doc.setDrawColor(184, 151, 58);
+  doc.line(margin, y, margin + 25, y);
+  y += 6;
+
+  // Flatten all items across labs into one list (no lab name shown)
+  var allItems = [];
+  for (var g = 0; g < r.groups.length; g++) {
+    for (var i = 0; i < r.groups[g].items.length; i++) {
+      allItems.push({ item: r.groups[g].items[i], lab: r.groups[g].lab });
+    }
+  }
+  // Sort alphabetically by name for a clean look
+  allItems.sort(function(a, b) {
+    return a.item.displayName.localeCompare(b.item.displayName, "ro");
+  });
+
+  var allBody = [];
+  for (var i = 0; i < allItems.length; i++) {
+    var entry = allItems[i];
+    var it = entry.item;
+    var d = getDetails(entry.lab, it.displayName);
+    var detLines = [];
+    if (d) {
+      var recipient = fmtRecipient(d);
+      if (recipient) detLines.push("Eprubeta: " + recipient);
+      if (d.MaterialBiologic) detLines.push("Material: " + d.MaterialBiologic);
+      if (d.CantitateMinima) detLines.push("Cantitate: " + d.CantitateMinima);
+      // Note: "Se trimite la" (subcontractant) intentionally omitted to hide lab info
+      if (d.Observatii) detLines.push("Atentie: " + d.Observatii);
+    }
+    if (it.offer.Timp && it.offer.Timp !== "N/A") {
+      detLines.unshift("Timp: " + it.offer.Timp);
+    }
+    allBody.push([
+      String(i + 1),
+      s(it.displayName),
+      s(detLines.join("\n")),
+      Math.round(it.finalPrice) + " RON"
+    ]);
+  }
+
+  ensureSpace(20);
+  doc.autoTable({
+    head: [["#", "Denumire analiza", "Detalii recoltare", "Pret"]],
+    body: allBody,
+    startY: y,
+    theme: "plain",
+    styles: { fontSize: 9, cellPadding: 2.5, valign: "top" },
+    headStyles: { textColor: [184, 151, 58], fontStyle: "bold", fontSize: 9 },
+    columnStyles: {
+      0: { cellWidth: 8, halign: "center", textColor: [120, 120, 120] },
+      1: { cellWidth: 70, fontStyle: "bold" },
+      2: { fontSize: 7.5, textColor: [80, 80, 80] },
+      3: { cellWidth: 24, halign: "right", fontStyle: "bold", textColor: [15, 17, 23] }
+    },
+    didDrawCell: function(data) {
+      // Gold rule under header, gray hairlines under body rows
+      if (data.column.index === 0) {
+        if (data.section === "head") {
+          doc.setDrawColor(184, 151, 58);
+          doc.setLineWidth(0.4);
+        } else {
+          doc.setDrawColor(230, 228, 220);
+          doc.setLineWidth(0.15);
+        }
+        doc.line(data.cell.x, data.cell.y + data.cell.height,
+                 pageWidth - margin, data.cell.y + data.cell.height);
+      }
+    },
+    margin: { left: margin, right: margin }
+  });
+  y = doc.lastAutoTable.finalY + 6;
+
+  // ─── Grand total (ink-light: gold rules instead of filled bar) ───
+  ensureSpace(20);
+  y += 4;
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.6);
+  doc.line(margin, y, pageWidth - margin, y);          // top rule
+  doc.line(margin, y + 14, pageWidth - margin, y + 14); // bottom rule
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(120, 120, 120);
+  doc.text("TOTAL DE PLATA", margin + 2, y + 9);
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(184, 151, 58);
+  doc.text(Math.round(r.grandTotal) + " RON", pageWidth - margin - 2, y + 9, { align: "right" });
+  y += 20;
+
+  // ─── Footer on each page ───
+  var totalPages = doc.internal.getNumberOfPages();
+  for (var p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    doc.setFont("helvetica", "normal");
+    doc.text("Clinica Central Pitesti  |  Cerere analize  |  " + s(fullName),
+             margin, pageHeight - 8);
+    doc.text("Pagina " + p + " / " + totalPages,
+             pageWidth - margin, pageHeight - 8, { align: "right" });
+  }
+
+  doc.save(buildPatientFilename("cerere_analize") + ".pdf");
+}
+
 function exportReportJson(r) {
   var now = new Date();
   var eprubeteForJson = buildEprubetSummary(r.items).map(function(item) {
@@ -1097,10 +1457,9 @@ function exportReportJson(r) {
     summary: {
       totalAnalize: r.items.length,
       totalLaboratoare: r.groups.length,
-      totalListRON: r.grandListTotal,
-      totalFinalRON: r.grandTotal,
-      economieRON: r.grandListTotal - r.grandTotal,
-      totalEprubete: totalEprubete
+      totalRON: Math.round(r.grandTotal * 100) / 100,
+      totalEprubete: totalEprubete,
+      pretSursa: "Catalog Clinica Central (fallback: laborator cu discount + 5%)"
     },
     eprubete: eprubeteForJson,
     discountsApplied: Object.assign({}, discounts),
@@ -1108,17 +1467,13 @@ function exportReportJson(r) {
       return {
         laborator: g.lab,
         numarAnalize: g.items.length,
-        subtotalListRON: g.listTotal,
-        subtotalFinalRON: g.total,
-        economieRON: g.listTotal - g.total,
+        subtotalRON: Math.round(g.total * 100) / 100,
         analize: g.items.map(function(it) {
           var d = getDetails(g.lab, it.displayName);
           var entry = {
             denumire: it.displayName,
-            pretLista: it.offer.Pret,
-            pretFinal: it.finalPrice,
-            discountPct: it.discount,
-            economieRON: it.offer.Pret - it.finalPrice,
+            pret: Math.round(it.finalPrice * 100) / 100,
+            sursaPret: it.priceSource === "cc" ? "Catalog Clinica Central" : "Laborator cu discount + 5%",
             timpExecutie: (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : null,
             categorie: (it.offer.Categorie && it.offer.Categorie !== "N/A") ? it.offer.Categorie : null
           };
@@ -1332,7 +1687,8 @@ function renderBrowseTable(results) {
   h += '<th data-col="Denumire">Analiza</th>';
   h += '<th data-col="Categorie">Categorie</th>';
   h += '<th data-col="Timp">Timp</th>';
-  h += '<th data-col="Pret" class="price-col">Pret</th>';
+  h += '<th data-col="Pret" class="price-col">Pret (cu disc.)</th>';
+  h += '<th class="price-col price-col-cc">Pret Clinica Central</th>';
   h += '</tr></thead><tbody>';
 
   for (var i = 0; i < rows.length; i++) {
@@ -1350,9 +1706,18 @@ function renderBrowseTable(results) {
     h += '<td data-label="Analiza" class="den-cell">' + denHtml + '</td>';
     h += '<td data-label="Categorie">' + esc(r.Categorie !== "N/A" ? r.Categorie : "") + '</td>';
     h += '<td data-label="Timp">' + esc(r.Timp !== "N/A" ? r.Timp : "") + '</td>';
-    h += '<td data-label="Pret" class="price-cell' + (isBest ? " cheapest" : "") + '">';
+    h += '<td data-label="Pret (cu disc.)" class="price-cell' + (isBest ? " cheapest" : "") + '">';
     h += '<span class="price-final">' + fp.toFixed(0) + ' RON</span>';
     if (discPct(r.Laborator) > 0) h += '<span class="price-orig">' + r.Pret.toFixed(0) + ' RON</span>';
+    h += '</td>';
+    // Pret Clinica Central
+    var ccp = getCCPrice(r.Denumire);
+    h += '<td data-label="Pret Clinica Central" class="price-cell-cc">';
+    if (ccp !== null) {
+      h += '<span class="price-cc">' + ccp.toFixed(0) + ' RON</span>';
+    } else {
+      h += '<span class="price-cc-na">—</span>';
+    }
     h += '</td></tr>';
   }
   h += '</tbody></table>';
@@ -1506,66 +1871,49 @@ function showScanError(msg) {
 }
 
 async function extractFromImage(base64Data, mediaType) {
-  var prompt = "Analizeaza acest bilet de trimitere medical romanesc (CAS). Extrage:\n\n" +
-    "1. **Numele si prenumele pacientului** — cauta in campul 'Nume si Prenume' sau similar\n" +
-    "2. **CNP-ul pacientului** (13 cifre) — cauta in campul 'CID/CNP/CE/PASS'\n" +
-    "3. **Lista analizelor medicale** recomandate (coloana 'Investigatii recomandate')\n\n" +
-    "Pentru fiecare analiza, returneaza EXACT textul asa cum e scris pe bilet (chiar daca are typo-uri sau abrevieri).\n\n" +
-    "Pentru nume/prenume: pe bilete romanesti de obicei ordinea este NUME PRENUME (familie, apoi prenume). Daca poti distinge clar, separa-le. Daca nu esti sigur, lasa pe null.\n\n" +
-    "Raspunde DOAR cu JSON valid, fara alte comentarii, fara code blocks. Format:\n" +
-    "{\n" +
-    '  "nume": "string sau null",\n' +
-    '  "prenume": "string sau null",\n' +
-    '  "cnp": "string 13 cifre sau null daca nu e clar",\n' +
-    '  "analize": ["denumire analiza 1", "denumire analiza 2", ...]\n' +
-    "}\n\n" +
-    "Daca biletul nu e lizibil sau nu e un bilet medical, returneaza { \"nume\": null, \"prenume\": null, \"cnp\": null, \"analize\": [] }.";
+  // Call Supabase Edge Function 'ocr-bilet' which proxies to Gemini.
+  // Gemini API key is stored as a Supabase Secret, NOT in the browser.
+  if (!window.sb || !window.sb.functions) {
+    throw new Error("Supabase client nu e initializat");
+  }
 
-  var response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } },
-            { type: "text", text: prompt }
-          ]
-        }
-      ]
-    })
+  var res = await window.sb.functions.invoke("ocr-bilet", {
+    body: {
+      imageBase64: base64Data,
+      mediaType: mediaType || "image/jpeg"
+    }
   });
 
-  if (!response.ok) {
-    var errText = await response.text();
-    throw new Error("API a raspuns cu " + response.status + ": " + errText.substring(0, 200));
+  if (res.error) {
+    var msg = res.error.message || String(res.error);
+    // Try to extract the inner error from the Edge Function response
+    if (res.error.context && typeof res.error.context.text === "function") {
+      try {
+        var errText = await res.error.context.text();
+        msg = errText.substring(0, 250);
+      } catch (e) {}
+    }
+    throw new Error("Edge Function: " + msg);
   }
 
-  var result = await response.json();
-  var textBlocks = result.content.filter(function(b){ return b.type === "text"; });
-  if (!textBlocks.length) throw new Error("Raspuns gol de la API");
-
-  var responseText = textBlocks.map(function(b){ return b.text; }).join("\n").trim();
-  responseText = responseText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-
-  var parsed;
-  try {
-    parsed = JSON.parse(responseText);
-  } catch (e) {
-    throw new Error("Nu pot parsa raspunsul AI: " + responseText.substring(0, 150));
+  var parsed = res.data;
+  if (!parsed) {
+    throw new Error("Raspuns gol de la Edge Function");
   }
-
+  if (parsed.error) {
+    throw new Error(parsed.error);
+  }
   if (!parsed.analize || !Array.isArray(parsed.analize)) {
-    throw new Error("Format neasteptat de raspuns (lipseste lista de analize)");
+    throw new Error("Format neasteptat (lipseste lista de analize)");
   }
 
   return {
     nume: parsed.nume || null,
     prenume: parsed.prenume || null,
     cnp: parsed.cnp || null,
+    dataNasterii: parsed.dataNasterii || null,
+    telefon: parsed.telefon || null,
+    email: parsed.email || null,
     analize: parsed.analize
   };
 }
@@ -1701,6 +2049,8 @@ function showScanResults(extracted) {
   window.__scanCnp = extracted.cnp;
   window.__scanNume = extracted.nume;
   window.__scanPrenume = extracted.prenume;
+  window.__scanEmail = extracted.email;
+  window.__scanTelefon = extracted.telefon;
 
   // Wire up checkboxes
   var checks = document.querySelectorAll("#scanMatchedList .scan-item-check");
@@ -1735,12 +2085,31 @@ function showScanResults(extracted) {
         cnpInput.value = window.__scanCnp;
         updateCnpUi();
       }
-      // Add selected analize to cart
+      // Pre-populate email if detected and currently empty
+      if (window.__scanEmail && !emailInput.value.trim()) {
+        emailInput.value = window.__scanEmail;
+        cartState.email = window.__scanEmail;
+      }
+      // Pre-populate telefon if detected and currently empty
+      if (window.__scanTelefon && !telefonNumarInput.value.trim()) {
+        // Normalize: strip leading "+40" or "0"
+        var tel = String(window.__scanTelefon).replace(/[\s\-\.]/g, "");
+        if (tel.indexOf("+40") === 0) tel = tel.slice(3);
+        else if (tel.indexOf("0040") === 0) tel = tel.slice(4);
+        else if (tel.charAt(0) === "0") tel = tel.slice(1);
+        telefonNumarInput.value = tel;
+        cartState.telefonNumar = tel;
+      }
+      // Add selected analize to cart (cheapest offer per analiza)
       var added = 0;
       for (var i = 0; i < window.__scanMatched.length; i++) {
         if (window.__scanMatched[i].checked) {
-          addToCart(window.__scanMatched[i].entry.key);
-          added++;
+          var entry = window.__scanMatched[i].entry;
+          var ch = cheapestOffer(entry);
+          if (ch && ch.offer && ch.offer.Laborator) {
+            addToCart(entry.key, ch.offer.Laborator);
+            added++;
+          }
         }
       }
       scanResultModal.classList.remove("visible");
@@ -1798,6 +2167,322 @@ document.getElementById("detailsModal").addEventListener("click", function(e) {
 });
 
 // ════════════════════════════════════════════════════════════════
+// EPRUBETE TOGGLE (collapse/expand)
+// ════════════════════════════════════════════════════════════════
+(function() {
+  var eprubeteToggleBtn = document.getElementById("eprubeteToggle");
+  var eprubeteSummaryEl2 = document.getElementById("eprubeteSummary");
+  if (eprubeteToggleBtn && eprubeteSummaryEl2) {
+    eprubeteToggleBtn.addEventListener("click", function() {
+      var collapsed = eprubeteSummaryEl2.classList.toggle("collapsed");
+      eprubeteToggleBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    });
+  }
+})();
+
+// ════════════════════════════════════════════════════════════════
+// PHONE PAIRING (Etapa 1: QR card Paun scanning)
+// ════════════════════════════════════════════════════════════════
+
+var PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // same as Paun cards (no I/O/0/1)
+function generatePairSessionId() {
+  var id = "";
+  for (var i = 0; i < 8; i++) {
+    id += PAIR_ALPHABET[Math.floor(Math.random() * PAIR_ALPHABET.length)];
+  }
+  return id;
+}
+
+var pairState = {
+  sessionId: null,
+  channel: null,
+  channelSessionId: null,
+  realtimeSub: null
+};
+
+var pairModal = document.getElementById("pairModal");
+var pairLoading = document.getElementById("pairLoading");
+var pairContent = document.getElementById("pairContent");
+var pairSessionIdEl = document.getElementById("pairSessionId");
+var pairQrCanvas = document.getElementById("pairQrCanvas");
+var pairStatusDot = document.getElementById("pairStatusDot");
+var pairStatusText = document.getElementById("pairStatusText");
+
+document.getElementById("btnPairPhone").addEventListener("click", openPairModal);
+document.getElementById("pairModalClose").addEventListener("click", closePairModal);
+pairModal.addEventListener("click", function(e) {
+  if (e.target === pairModal) closePairModal();
+});
+
+async function openPairModal() {
+  if (!window.__CURRENT_USER__ || !window.sb) {
+    alert("Trebuie sa fii logat pentru a folosi aceasta functie.");
+    return;
+  }
+  pairModal.classList.add("visible");
+
+  // If we already have an active session + channel, just show the existing QR
+  if (pairState.sessionId && pairState.channel) {
+    console.log("[pair] reusing existing session:", pairState.sessionId);
+    pairLoading.style.display = "none";
+    pairContent.style.display = "block";
+    pairSessionIdEl.textContent = pairState.sessionId;
+    // Regenerate QR display (in case DOM was cleared)
+    var scanUrl = window.location.origin + "/scan.html?s=" + pairState.sessionId;
+    generatePairQR(scanUrl);
+    return;
+  }
+
+  pairLoading.style.display = "flex";
+  pairContent.style.display = "none";
+  pairStatusDot.classList.remove("connected");
+  pairStatusText.textContent = "Astept telefon...";
+
+  // 1. Generate session ID
+  var sid = generatePairSessionId();
+  pairState.sessionId = sid;
+
+  // 2. Insert into cc_pairing_sessions
+  try {
+    var insertRes = await window.sb.from("cc_pairing_sessions").insert([{
+      session_id: sid,
+      user_id: window.__CURRENT_USER__.id,
+      user_email: window.__CURRENT_USER__.email
+    }]).select();
+    if (insertRes.error) {
+      console.error("[pair] insert failed:", insertRes.error);
+      alert("Nu am putut crea sesiunea. Verifica conexiunea.");
+      pairState.sessionId = null;
+      closePairModal();
+      return;
+    }
+  } catch (e) {
+    console.error("[pair] insert exception:", e);
+    alert("Eroare la creare sesiune: " + e.message);
+    pairState.sessionId = null;
+    closePairModal();
+    return;
+  }
+
+  // 3. Generate QR code (URL that opens scan page on phone)
+  var scanUrl = window.location.origin + "/scan.html?s=" + sid;
+  generatePairQR(scanUrl);
+  pairSessionIdEl.textContent = sid;
+
+  // 4. Subscribe to Realtime broadcast channel
+  subscribeToPairingChannel(sid);
+
+  pairLoading.style.display = "none";
+  pairContent.style.display = "block";
+}
+
+function generatePairQR(text) {
+  pairQrCanvas.innerHTML = "";
+  try {
+    var qr = qrcode(0, "M"); // type 0 = auto-size, error correction M
+    qr.addData(text);
+    qr.make();
+    // 8px per cell, 4 cell border
+    var size = 280;
+    pairQrCanvas.innerHTML = qr.createSvgTag(8, 4);
+    var svg = pairQrCanvas.querySelector("svg");
+    if (svg) {
+      svg.setAttribute("width", String(size));
+      svg.setAttribute("height", String(size));
+    }
+  } catch (e) {
+    console.error("[pair] QR generation failed:", e);
+    pairQrCanvas.innerHTML = '<div style="color:red">Nu am putut genera codul QR</div>';
+  }
+}
+
+function subscribeToPairingChannel(sessionId) {
+  if (!window.sb || !window.sb.channel) {
+    console.warn("[pair] Supabase Realtime not available");
+    return;
+  }
+  // If we already have an active channel for THIS session, don't recreate.
+  // Re-subscribing closes the old channel, losing in-flight messages.
+  if (pairState.channel && pairState.channelSessionId === sessionId) {
+    console.log("[pair] channel already exists for session:", sessionId);
+    return;
+  }
+  // Clean up any previous subscription (different session)
+  if (pairState.channel) {
+    try { window.sb.removeChannel(pairState.channel); } catch (e) {}
+    pairState.channel = null;
+    pairState.channelSessionId = null;
+  }
+
+  var ch = window.sb.channel("pairing:" + sessionId, {
+    config: { broadcast: { ack: false, self: false } }
+  });
+
+  // Phone connected event
+  ch.on("broadcast", { event: "phone_connected" }, function(payload) {
+    console.log("[pair] phone connected:", payload);
+    pairStatusDot.classList.add("connected");
+    pairStatusText.textContent = "Telefon conectat";
+    showPairToast("Telefon conectat", "Acum poti scana QR cardul Paun sau bilete de trimitere");
+  });
+
+  // Patient scanned via Paun card
+  ch.on("broadcast", { event: "scan_patient" }, function(payload) {
+    console.log("[pair] scan_patient:", payload);
+    handleScannedPatient(payload.payload || payload);
+  });
+
+  // Bilet de trimitere photographed on phone, sent here for OCR
+  ch.on("broadcast", { event: "scan_bilet" }, function(payload) {
+    console.log("[pair] scan_bilet received");
+    var data = payload.payload || payload;
+    if (!data || !data.imageBase64) {
+      console.warn("[pair] scan_bilet missing imageBase64");
+      return;
+    }
+    handleBiletFromPhone(data);
+  });
+
+  ch.subscribe(function(status) {
+    console.log("[pair] channel status:", status, "session:", sessionId);
+  });
+
+  pairState.channel = ch;
+  pairState.channelSessionId = sessionId;
+}
+
+function showPairToast(title, sub) {
+  var existing = document.querySelector(".pair-toast");
+  if (existing) existing.remove();
+  var t = document.createElement("div");
+  t.className = "pair-toast";
+  t.innerHTML = '<strong>' + esc(title) + '</strong>' +
+                (sub ? '<span class="toast-sub">' + esc(sub) + '</span>' : '');
+  document.body.appendChild(t);
+  setTimeout(function() { t.classList.add("visible"); }, 10);
+  setTimeout(function() {
+    t.classList.remove("visible");
+    setTimeout(function() { t.remove(); }, 400);
+  }, 4500);
+}
+
+// Handle data received from phone when it scans a Paun QR card
+function handleScannedPatient(data) {
+  // data: { codPaun, prenume, nume, cnp, email, telefon, telefonPrefix, discountPct }
+  if (!data) return;
+
+  // Switch to cart view if not already
+  switchView("cart");
+
+  // Auto-populate patient fields
+  if (data.prenume) {
+    cartState.prenume = data.prenume;
+    prenumeInput.value = data.prenume;
+    cartState.prenumeValid = true;
+  }
+  if (data.nume) {
+    cartState.nume = data.nume;
+    numeInput.value = data.nume;
+    cartState.numeValid = true;
+  }
+  if (data.cnp) {
+    cartState.cnp = data.cnp;
+    cnpInput.value = data.cnp;
+    cartState.cnpValid = isCnpValid(data.cnp);
+  }
+  if (data.email) {
+    cartState.email = data.email;
+    emailInput.value = data.email;
+  }
+  if (data.telefon) {
+    cartState.telefonNumar = data.telefon;
+    telefonNumarInput.value = data.telefon;
+    if (data.telefonPrefix) {
+      cartState.telefonPrefix = data.telefonPrefix;
+      telefonPrefixSelect.value = data.telefonPrefix;
+    }
+  }
+
+  // Apply Paun discount if present
+  if (typeof data.discountPct === "number" && data.discountPct > 0) {
+    cartState.paunDiscountPct = data.discountPct;
+    cartState.paunCodCard = data.codPaun || null;
+    showPairToast(
+      "Card Paun: " + data.discountPct + "%",
+      "Discount aplicat automat la analize: " + [data.prenume, data.nume].filter(Boolean).join(" ")
+    );
+  } else {
+    cartState.paunDiscountPct = 0;
+    cartState.paunCodCard = data.codPaun || null;
+    showPairToast(
+      "Client identificat",
+      (data.prenume && data.nume) ? (data.prenume + " " + data.nume) : "Date precompletate"
+    );
+  }
+
+  updateCnpUi();
+  updatePacientValidation();
+  renderCart(); // re-render to apply discount if any
+  closePairModal();
+}
+
+function closePairModal() {
+  pairModal.classList.remove("visible");
+  // Keep the session alive in DB; just close the channel locally
+  // (laptop may reopen pairing later in same session window)
+}
+
+// Handle a bilet image sent from phone via Realtime broadcast.
+// Pipeline: receive base64 -> show modal "processing" -> call existing
+// extractFromImage -> showScanResults (which already wires Add-to-cart).
+async function handleBiletFromPhone(data) {
+  // Switch to cart view if not already
+  switchView("cart");
+
+  // Show the existing scan modal in "processing" state
+  scanModal.classList.add("visible");
+  scanPickerArea.style.display = "none";
+  scanErrorArea.style.display = "none";
+  scanProcessingArea.style.display = "block";
+  document.getElementById("scanStatusText").textContent = "Bilet primit de pe telefon";
+  document.getElementById("scanStatusSub").textContent = "Claude analizeaza biletul...";
+
+  // Show preview
+  try {
+    document.getElementById("scanPreviewImg").src = "data:" + (data.mediaType || "image/jpeg") + ";base64," + data.imageBase64;
+  } catch (e) {}
+
+  showPairToast("Bilet primit de pe telefon", "Se analizeaza imaginea cu AI...");
+
+  try {
+    var extracted = await extractFromImage(data.imageBase64, data.mediaType || "image/jpeg");
+    showScanResults(extracted);
+  } catch (e) {
+    console.error("[bilet] OCR error:", e);
+    showScanError("Eroare la procesare bilet: " + (e.message || e));
+  }
+}
+
+// Apply Paun discount when computing effective price
+// (override of effectivePrice to consider Paun discount)
+var __origEffectivePrice = effectivePrice;
+effectivePrice = function(denumire, laborator, pretLista) {
+  var base = __origEffectivePrice(denumire, laborator, pretLista);
+  if (cartState.paunDiscountPct && cartState.paunDiscountPct > 0) {
+    var discounted = base.price * (1 - cartState.paunDiscountPct / 100);
+    return {
+      price: Math.round(discounted * 100) / 100,
+      source: base.source + "+paun" + cartState.paunDiscountPct + "%"
+    };
+  }
+  return base;
+};
+
+// Initialize Paun fields in cartState
+cartState.paunDiscountPct = 0;
+cartState.paunCodCard = null;
+
+// ════════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════════
 updateCnpUi();
@@ -1841,7 +2526,8 @@ async function saveCerere(r) {
         denumire: it.displayName,
         laborator: it.offer.Laborator,
         pret_lista: it.offer.Pret,
-        pret_final: it.finalPrice,
+        pret_final: Math.round(it.finalPrice * 100) / 100,
+        pret_sursa: it.priceSource,
         discount: it.discount,
         timp: (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : null,
         categorie: (it.offer.Categorie && it.offer.Categorie !== "N/A") ? it.offer.Categorie : null,
@@ -2019,7 +2705,14 @@ function renderIstoric() {
     if (c.user_email) html += '<span class="istoric-user">' + esc(c.user_email) + '</span>';
     html += '</div></div>';
     html += '<div class="istoric-row-price"><strong>' + Math.round(c.total_final_ron) + '</strong> RON</div>';
-    html += '<button class="istoric-row-btn" data-id="' + esc(c.id) + '">Detalii</button>';
+    html += '<div class="istoric-row-actions">';
+    html += '<button class="istoric-row-btn" data-act="detalii" data-id="' + esc(c.id) + '">Detalii</button>';
+    html += '<button class="istoric-row-btn istoric-btn-pdf" data-act="pdf" data-id="' + esc(c.id) + '">PDF</button>';
+    html += '<button class="istoric-row-btn istoric-btn-xlsx" data-act="xlsx" data-id="' + esc(c.id) + '">Excel</button>';
+    html += '<button class="istoric-row-btn istoric-btn-json" data-act="json" data-id="' + esc(c.id) + '">JSON</button>';
+    html += '<button class="istoric-row-btn istoric-btn-new" data-act="noua" data-id="' + esc(c.id) + '">Cerere noua</button>';
+    html += '<button class="istoric-row-btn istoric-btn-same" data-act="same" data-id="' + esc(c.id) + '">Aceeasi cerere</button>';
+    html += '</div>';
     html += '</div>';
   }
   listEl.innerHTML = html;
@@ -2028,9 +2721,186 @@ function renderIstoric() {
   for (var i = 0; i < btns.length; i++) {
     (function(btn) {
       btn.addEventListener("click", function() {
-        showIstoricDetail(btn.getAttribute("data-id"));
+        var id = btn.getAttribute("data-id");
+        var act = btn.getAttribute("data-act");
+        if (act === "detalii") showIstoricDetail(id);
+        else if (act === "pdf") exportIstoricPdf(id);
+        else if (act === "xlsx") exportIstoricXlsx(id);
+        else if (act === "json") exportIstoricJson(id);
+        else if (act === "noua") cerereNouaDinIstoric(id);
+        else if (act === "same") aceeasiCerereDinIstoric(id);
       });
     })(btns[i]);
+  }
+}
+
+// ─── Helper: rebuild a report-like object from a saved cerere ───
+function rebuildReportFromCerere(c) {
+  // c.items is the JSONB array saved at process time
+  var items = (c.items || []).map(function(it) {
+    return {
+      displayName: it.denumire,
+      offer: {
+        Laborator: it.laborator,
+        Denumire: it.denumire,
+        Pret: it.pret_lista,
+        Timp: it.timp || "N/A",
+        Categorie: it.categorie || "N/A"
+      },
+      finalPrice: it.pret_final,
+      priceSource: it.pret_sursa || "cc",  // backwards-compatible default
+      discount: it.discount
+    };
+  });
+  // Group by lab
+  var groupsMap = {};
+  for (var i = 0; i < items.length; i++) {
+    var lab = items[i].offer.Laborator;
+    if (!groupsMap[lab]) groupsMap[lab] = { lab: lab, items: [], total: 0, listTotal: 0 };
+    groupsMap[lab].items.push(items[i]);
+    groupsMap[lab].total += items[i].finalPrice;
+    groupsMap[lab].listTotal += items[i].offer.Pret;
+  }
+  var groups = Object.keys(groupsMap).map(function(k){ return groupsMap[k]; });
+  return {
+    items: items,
+    groups: groups,
+    grandTotal: c.total_final_ron,
+    grandListTotal: c.total_lista_ron
+  };
+}
+
+// ─── Export Excel from istoric ───
+function exportIstoricXlsx(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  // Temporarily set cartState patient fields so export header is correct
+  var saved = {
+    prenume: cartState.prenume, nume: cartState.nume, cnp: cartState.cnp,
+    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar
+  };
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.cnp = c.cnp_pacient || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  var r = rebuildReportFromCerere(c);
+  exportReportXlsx(r);
+  // Restore
+  cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
+  cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
+}
+
+// ─── Export PDF from istoric ───
+function exportIstoricPdf(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  var saved = {
+    prenume: cartState.prenume, nume: cartState.nume, cnp: cartState.cnp,
+    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar
+  };
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.cnp = c.cnp_pacient || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  var r = rebuildReportFromCerere(c);
+  exportReportPdf(r);
+  cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
+  cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
+}
+
+// ─── Export JSON from istoric ───
+function exportIstoricJson(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  var saved = {
+    prenume: cartState.prenume, nume: cartState.nume, cnp: cartState.cnp,
+    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar
+  };
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.cnp = c.cnp_pacient || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  var r = rebuildReportFromCerere(c);
+  exportReportJson(r);
+  cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
+  cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
+}
+
+// ─── Cerere noua din istoric: pastreaza DOAR pacientul ───
+function cerereNouaDinIstoric(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  // Fill patient fields, empty cart
+  prenumeInput.value = c.pacient_prenume || "";
+  numeInput.value = c.pacient_nume || "";
+  cnpInput.value = c.cnp_pacient || "";
+  emailInput.value = c.pacient_email || "";
+  telefonPrefixSelect.value = c.pacient_telefon_prefix || "+40";
+  telefonNumarInput.value = c.pacient_telefon_numar || "";
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  cartState.cart = [];
+  updateNumeField(prenumeInput, "prenume");
+  updateNumeField(numeInput, "nume");
+  updateCnpUi();
+  renderCart();
+  switchView("cart");
+}
+
+// ─── Aceeasi cerere din istoric: pacient + analize (preturi/data se recalculeaza) ───
+function aceeasiCerereDinIstoric(id) {
+  var c = istoricState.cereri.find(function(x){ return x.id === id; });
+  if (!c) return;
+  // Fill patient
+  prenumeInput.value = c.pacient_prenume || "";
+  numeInput.value = c.pacient_nume || "";
+  cnpInput.value = c.cnp_pacient || "";
+  emailInput.value = c.pacient_email || "";
+  telefonPrefixSelect.value = c.pacient_telefon_prefix || "+40";
+  telefonNumarInput.value = c.pacient_telefon_numar || "";
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+  // Rebuild cart from saved items — re-resolve current best offer for each analiza
+  cartState.cart = [];
+  var notFound = [];
+  var items = c.items || [];
+  for (var i = 0; i < items.length; i++) {
+    var den = items[i].denumire;
+    var key = normName(den);
+    var entry = ANALIZE_INDEX[key];
+    if (entry) {
+      // Pick the cheapest offer now (prices may have changed since the original)
+      var best = cheapestOffer(entry);
+      if (best.offer) {
+        addToCart(key, best.offer.Laborator);
+      } else {
+        notFound.push(den);
+      }
+    } else {
+      notFound.push(den);
+    }
+  }
+  updateNumeField(prenumeInput, "prenume");
+  updateNumeField(numeInput, "nume");
+  updateCnpUi();
+  renderCart();
+  switchView("cart");
+  if (notFound.length) {
+    setTimeout(function() {
+      alert("Atentie: " + notFound.length + " analize nu au mai fost gasite in catalogul curent si nu au fost adaugate:\n\n" + notFound.join("\n"));
+    }, 300);
   }
 }
 
@@ -2060,7 +2930,7 @@ function showIstoricDetail(id) {
   if (c.user_email) {
     metaHtml += '<div class="istoric-detail-meta-row"><span>De catre:</span><strong>' + esc(c.user_email) + '</strong></div>';
   }
-  metaHtml += '<div class="istoric-detail-meta-row"><span>Total:</span><strong>' + Math.round(c.total_final_ron) + ' RON</strong> (economie: ' + Math.round(c.economie_ron) + ' RON)</div>';
+  metaHtml += '<div class="istoric-detail-meta-row"><span>Total:</span><strong>' + Math.round(c.total_final_ron) + ' RON</strong></div>';
   meta.innerHTML = metaHtml;
 
   // Body — show groups + items
@@ -2076,7 +2946,13 @@ function showIstoricDetail(id) {
     html += '<ul class="istoric-detail-group-items">';
     for (var i = 0; i < grpItems.length; i++) {
       var it = grpItems[i];
-      html += '<li><span class="den">' + esc(it.denumire) + '</span><span class="prc">' + Math.round(it.pret_final) + ' RON</span></li>';
+      var srcBadge = '';
+      if (it.pret_sursa === "lab+5%") {
+        srcBadge = ' <small style="color:rgba(15,17,23,0.4);font-size:10px">(lab+5%)</small>';
+      } else if (it.pret_sursa === "cc") {
+        srcBadge = ' <small style="color:var(--gold);font-size:10px">(CC)</small>';
+      }
+      html += '<li><span class="den">' + esc(it.denumire) + srcBadge + '</span><span class="prc">' + Math.round(it.pret_final) + ' RON</span></li>';
     }
     html += '</ul></div>';
   }
@@ -2138,3 +3014,1071 @@ document.getElementById("btnIstoricClearFilters").addEventListener("click", func
   document.getElementById("istoricFilterTo").value = "";
   if (istoricState.loaded) renderIstoric();
 });
+
+// ════════════════════════════════════════════════════════════════
+// VIEW 4: BORDEROURI (generare PDF pe laborator/data)
+// ════════════════════════════════════════════════════════════════
+var borderouState = {
+  loaded: false,
+  cereri: [],
+  selectedDate: "",
+  dateField: "created_at",
+  selectedLab: ""
+};
+
+// Labs with PDF templates currently implemented
+// Derzelius and Poliana have their own dedicated templates.
+// Sante template is reused (with lab name swapped) for Clinica Sante, Binisan, Solomed, Medilab
+// until proper templates are provided.
+var BORDEROU_TEMPLATES = ["Derzelius", "Clinica Sante", "Poliana", "Binisan", "Solomed", "Medilab"];
+var SANTE_TEMPLATE_LABS = ["Clinica Sante", "Binisan", "Solomed", "Medilab"];
+
+// Classify an analiza into a borderou column key
+// Returns one of: HLG, COAG, VSH, BCH, URINA, FECALE, TEXUDA, ALTELE
+// Uses BOTH name-based rules AND vacutainer info (recipient + culoare + material)
+// for much higher precision (was ~70% ALTELE, now ~25% ALTELE).
+// Optional lab parameter lets us look up vacutainer info from getDetails().
+function classifyAnaliza(denumire, categorie, lab) {
+  var d = (denumire || "").toLowerCase();
+  var c = (categorie || "");
+  // Look up vacutainer info from details_*.json if lab is provided
+  var recipient = "", culoare = "", material = "";
+  if (lab) {
+    var det = getDetails(lab, denumire);
+    if (det) {
+      recipient = (det.Recipient || "").toLowerCase();
+      culoare = (det.CuloareDop || "").toLowerCase();
+      material = (det.MaterialBiologic || "").toLowerCase();
+      // Strip diacritics from culoare for matching (e.g. "Roșu" -> "rosu")
+      culoare = culoare.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      recipient = recipient.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    }
+  }
+  var rc = recipient + " " + culoare; // combined for color/recipient checks
+
+  // ─── LAME / Citologie ───
+  if (d.indexOf("babes-papanicolau") !== -1 || d.indexOf("babes papanicolau") !== -1 ||
+      d.indexOf("papanicolau") !== -1 || d.indexOf("thinprep") !== -1 ||
+      d.indexOf("pap test") !== -1 || d.indexOf("pap-test") !== -1 ||
+      d.indexOf("citologic") !== -1 || d.indexOf("citologie") !== -1) return "LAME";
+  if (recipient.indexOf("lama") !== -1 || recipient.indexOf("lame") !== -1) return "LAME";
+
+  // ─── EXUDAT / secretii (key TEXUDA for PDF compatibility) ───
+  if (d.indexOf("exsudat") !== -1 || d.indexOf("exudat") !== -1 ||
+      d.indexOf("tampon ") !== -1 || d.indexOf("tampon nazal") !== -1 ||
+      d.indexOf("tampon vagin") !== -1 || d.indexOf("tampon uretral") !== -1 ||
+      d.indexOf("tampon faringian") !== -1 ||
+      d.indexOf("secretie nazal") !== -1 || d.indexOf("secretie vagin") !== -1 ||
+      d.indexOf("secretie uretral") !== -1 || d.indexOf("secretie conjunctiv") !== -1 ||
+      d.indexOf("secretie otic") !== -1 || d.indexOf("secretie auric") !== -1 ||
+      d.indexOf("cultura faringian") !== -1 || d.indexOf("cultura nazal") !== -1) return "TEXUDA";
+  if (recipient.indexOf("eswab") !== -1 || recipient.indexOf("tampon") !== -1 ||
+      recipient.indexOf("swab") !== -1) return "TEXUDA";
+  if (c === "EXSUDATE" || c === "SECRETII") return "TEXUDA";
+
+  // ─── FECALE / coprocultura ───
+  if (d.indexOf("coproparazit") !== -1 || d.indexOf("coprocultur") !== -1 ||
+      d.indexOf("materii fecale") !== -1 || d.indexOf("fecale") !== -1 ||
+      d.indexOf("scaun") !== -1 || d.indexOf("calprotectin") !== -1 ||
+      d.indexOf("h. pylori antigen") !== -1 || d.indexOf("helicobacter pylori antigen") !== -1 ||
+      d.indexOf("antigen helicobacter") !== -1 || d.indexOf("rotavirus") !== -1 ||
+      d.indexOf("adenovirus fecal") !== -1 || d.indexOf("sange ocult") !== -1 ||
+      d.indexOf("hemoragii oculte") !== -1 || d.indexOf("lactoferin") !== -1 ||
+      d.indexOf("hemoglobina umana din secretii") !== -1 ||
+      d.indexOf("coprologie") !== -1 || d.indexOf("amprenta anala") !== -1) return "FECALE";
+  if (material.indexOf("materii fecale") !== -1 || material.indexOf("scaun") !== -1 ||
+      material.indexOf("fecale") !== -1 || material.indexOf("coprocitograma") !== -1) return "FECALE";
+  if (recipient.indexOf("coprorecolt") !== -1) return "FECALE";
+  if (c === "MATERII FECALE" || c === "Coprologie și screening digestiv") return "FECALE";
+
+  // ─── URINA ───
+  if (d.indexOf("urocultur") !== -1 || d.indexOf("sumar urina") !== -1 ||
+      d.indexOf("sumar de urina") !== -1 || d.indexOf("sumar urinar") !== -1 ||
+      d.indexOf("examen urina") !== -1 || d.indexOf("urina spontana") !== -1 ||
+      d.indexOf("urina/24 ore") !== -1 || d.indexOf(" urinar") !== -1 ||
+      d.indexOf("microalbumin") !== -1 || d.indexOf("proteinurie") !== -1 ||
+      d.indexOf("albumin urin") !== -1 || d.indexOf("sediment urinar") !== -1 ||
+      d.indexOf("calciu urinar") !== -1 || d.indexOf("cortizol urinar") !== -1 ||
+      d.indexOf("creatinina urinar") !== -1 || d.indexOf("magneziu urinar") !== -1 ||
+      d.indexOf("potasiu urinar") !== -1 || d.indexOf("sodiu urinar") !== -1 ||
+      d.indexOf("uree urinar") !== -1 || d.indexOf("acid uric urinar") !== -1 ||
+      d.indexOf("glucoza urinar") !== -1 || d.indexOf("fosfat urinar") !== -1 ||
+      d.indexOf("clor urinar") !== -1 || d.indexOf("in urina") !== -1) return "URINA";
+  if (material.indexOf("urin") !== -1 || recipient.indexOf("urin") !== -1) return "URINA";
+  if (c === "URINA") return "URINA";
+
+  // ─── COAG ───
+  if (d.indexOf("coagular") !== -1 || d.indexOf("aptt") !== -1 || d.indexOf("ttpa") !== -1 ||
+      d.indexOf("fibrinogen") !== -1 || d.indexOf("d-dimer") !== -1 ||
+      d.indexOf("d dimer") !== -1 || d.indexOf("ddimer") !== -1 ||
+      d.indexOf("antitrombina") !== -1 || d.indexOf("antitrombin") !== -1 ||
+      d.indexOf("proteina c") !== -1 || d.indexOf("proteina s") !== -1 ||
+      d.indexOf("timp quick") !== -1 || d.indexOf("timp de protrombina") !== -1 ||
+      d.indexOf("protrombin") !== -1 || d.indexOf("pt inr") !== -1 ||
+      d.indexOf("pt, inr") !== -1 || d.indexOf("factor v ") !== -1 ||
+      d.indexOf("factor viii") !== -1 || d.indexOf("factor ix") !== -1 ||
+      d.indexOf("factor x ") !== -1 || d.indexOf("factor xi") !== -1 ||
+      d.indexOf("lupus anticoagulant") !== -1 || d.indexOf("timp de trombina") !== -1) return "COAG";
+  var dt = d.trim();
+  if (dt === "pt" || dt === "inr" || dt === "pt inr" || dt === "pt, inr" || dt === "pt/inr") return "COAG";
+  if (rc.indexOf("albastru") !== -1 || rc.indexOf("citrat") !== -1 ||
+      material.indexOf("citrat") !== -1) return "COAG";
+  if (c === "Coagulare și hemostază") return "COAG";
+
+  // ─── VSH ───
+  if (d.indexOf("vsh") !== -1 || d.indexOf("sedimentare") !== -1 ||
+      d.indexOf("viteza de sedimentare") !== -1) return "VSH";
+  if (recipient.indexOf("vsh") !== -1) return "VSH";
+
+  // ─── HLG ───
+  if (d.indexOf("hemoleucograma") !== -1 || d.indexOf("hemograma") !== -1 ||
+      d.indexOf("reticulocit") !== -1 || d.indexOf("frotiu sanguin") !== -1 ||
+      d.indexOf("grup sanguin") !== -1 || d.indexOf("grupul sanguin") !== -1 ||
+      d.indexOf("factor rh") !== -1 || d.indexOf("rezistenta osmotica") !== -1 ||
+      d.indexOf("aglutinine la rece") !== -1 || d.indexOf("hlg") === 0) return "HLG";
+  if (/\b(rh|abo)\b/.test(d)) return "HLG";
+  // EDTA / dop mov = hematology (when not COAG)
+  if (rc.indexOf("edta") !== -1 || rc.indexOf("mov") !== -1) return "HLG";
+  if (material.indexOf("sange total") !== -1 || material.indexOf("sange edta") !== -1 ||
+      material.indexOf("sange integral") !== -1) return "HLG";
+  if (c === "Hematologie") return "HLG";
+
+  // ─── BCH (Biochimie) — uses recipient signals ───
+  if (d.indexOf("biochimi") !== -1) return "BCH";
+  if (rc.indexOf("galben") !== -1 || rc.indexOf("biochimie") !== -1 ||
+      rc.indexOf("serologie") !== -1 || rc.indexOf("sst") !== -1 ||
+      rc.indexOf("gel separator") !== -1 || rc.indexOf("rosu") !== -1) return "BCH";
+  if (material.indexOf("ser") === 0 || material.indexOf(" ser ") !== -1 ||
+      material === "ser" || material.indexOf("plasma") !== -1 ||
+      material.indexOf("sange venos") !== -1) return "BCH";
+  if (c === "Biochimie") return "BCH";
+
+  return "ALTELE";
+}
+
+// Load all cereri (reuses istoric data if already loaded)
+async function loadBorderouri() {
+  var listEl = document.getElementById("borderouPreview");
+  // If istoric already loaded, just use its data
+  if (istoricState.loaded && istoricState.cereri.length > 0) {
+    borderouState.cereri = istoricState.cereri;
+    borderouState.loaded = true;
+    initBorderouDate();
+    return;
+  }
+  // Else load same way as istoric
+  listEl.innerHTML = '<div class="istoric-loading">Se incarca cererile...</div>';
+  try {
+    var res = await sb.from("cc_cereri")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    if (res.error) {
+      listEl.innerHTML = '<div class="istoric-empty">Eroare la incarcarea cererilor: ' + esc(res.error.message) + '</div>';
+      return;
+    }
+    borderouState.cereri = res.data || [];
+    borderouState.loaded = true;
+    initBorderouDate();
+  } catch (e) {
+    listEl.innerHTML = '<div class="istoric-empty">Eroare: ' + esc(e.message || e) + '</div>';
+  }
+}
+
+// Init date input to today if empty, then populate lab dropdown
+function initBorderouDate() {
+  var dateInput = document.getElementById("borderouFilterDate");
+  if (!dateInput.value) {
+    var today = new Date();
+    var iso = today.getFullYear() + "-" + String(today.getMonth()+1).padStart(2,"0") + "-" + String(today.getDate()).padStart(2,"0");
+    dateInput.value = iso;
+  }
+  borderouState.selectedDate = dateInput.value;
+  borderouState.dateField = document.getElementById("borderouFilterDateField").value;
+  updateBorderouLabsDropdown();
+}
+
+// Get cereri matching the selected date
+function getCereriForSelectedDate() {
+  var d = borderouState.selectedDate;
+  if (!d) return [];
+  var fromTs = new Date(d + "T00:00:00").getTime();
+  var toTs = new Date(d + "T23:59:59.999").getTime();
+  var field = borderouState.dateField;
+  return borderouState.cereri.filter(function(c) {
+    var v = c[field];
+    if (!v) return false;
+    var t;
+    if (typeof v === "string") {
+      // Could be ISO or YYYY-MM-DD
+      t = new Date(v.length === 10 ? v + "T12:00:00" : v).getTime();
+    } else {
+      t = new Date(v).getTime();
+    }
+    return t >= fromTs && t <= toTs;
+  });
+}
+
+// Get unique labs that have items in the cereri for this date
+function getLabsForSelectedDate() {
+  var cereri = getCereriForSelectedDate();
+  var labSet = {};
+  for (var i = 0; i < cereri.length; i++) {
+    var items = cereri[i].items || [];
+    for (var j = 0; j < items.length; j++) {
+      var lab = items[j].laborator;
+      if (lab) labSet[lab] = true;
+    }
+  }
+  return Object.keys(labSet).sort();
+}
+
+function updateBorderouLabsDropdown() {
+  var labSelect = document.getElementById("borderouFilterLab");
+  var labs = getLabsForSelectedDate();
+  if (labs.length === 0) {
+    labSelect.innerHTML = '<option value="">Nicio cerere in ziua aleasa</option>';
+    document.getElementById("borderouStats").innerHTML = "";
+    document.getElementById("borderouPreview").innerHTML = '<div class="istoric-empty">Nu sunt cereri inregistrate pentru ' + esc(borderouState.selectedDate) + '.</div>';
+    return;
+  }
+  var html = '<option value="">Selecteaza laboratorul...</option>';
+  for (var i = 0; i < labs.length; i++) {
+    var hasTemplate = BORDEROU_TEMPLATES.indexOf(labs[i]) !== -1;
+    html += '<option value="' + esc(labs[i]) + '">' + esc(labs[i]) + (hasTemplate ? '' : ' (fara template)') + '</option>';
+  }
+  labSelect.innerHTML = html;
+  document.getElementById("borderouStats").innerHTML = "<strong>" + labs.length + "</strong> laboratoare cu cereri in ziua aleasa.";
+  // Restore previous selection if still valid
+  if (borderouState.selectedLab && labs.indexOf(borderouState.selectedLab) !== -1) {
+    labSelect.value = borderouState.selectedLab;
+    renderBorderouPreview();
+  } else {
+    borderouState.selectedLab = "";
+    document.getElementById("borderouPreview").innerHTML = '<div class="istoric-loading">Alege laboratorul pentru previzualizare.</div>';
+  }
+}
+
+// Get rows for the selected lab + date
+function buildBorderouRows() {
+  var cereri = getCereriForSelectedDate();
+  var lab = borderouState.selectedLab;
+  if (!lab) return [];
+  var rows = [];
+  for (var i = 0; i < cereri.length; i++) {
+    var c = cereri[i];
+    var items = c.items || [];
+    var labItems = items.filter(function(it) { return it.laborator === lab; });
+    if (labItems.length === 0) continue;
+    // Build column flags
+    var cols = { HLG:false, COAG:false, VSH:false, BCH:false, URINA:false, FECALE:false, TEXUDA:false, LAME:false, ALTELE:false };
+    var altele_names = [];
+    for (var j = 0; j < labItems.length; j++) {
+      var col = classifyAnaliza(labItems[j].denumire, labItems[j].categorie, labItems[j].laborator);
+      cols[col] = true;
+      if (col === "ALTELE") altele_names.push(labItems[j].denumire);
+    }
+    rows.push({
+      cerere_id: c.id,
+      created_at: c.created_at,
+      prenume: c.pacient_prenume || "",
+      nume: c.pacient_nume || "",
+      cnp: c.cnp_pacient || "",
+      cols: cols,
+      altele_names: altele_names,
+      analize_count: labItems.length
+    });
+  }
+  return rows;
+}
+
+function renderBorderouPreview() {
+  var lab = borderouState.selectedLab;
+  var listEl = document.getElementById("borderouPreview");
+  if (!lab) {
+    listEl.innerHTML = '<div class="istoric-loading">Alege laboratorul pentru previzualizare.</div>';
+    return;
+  }
+  var rows = buildBorderouRows();
+  if (rows.length === 0) {
+    listEl.innerHTML = '<div class="istoric-empty">Nicio cerere pentru ' + esc(lab) + ' in ' + esc(borderouState.selectedDate) + '.</div>';
+    return;
+  }
+  var hasTemplate = BORDEROU_TEMPLATES.indexOf(lab) !== -1;
+  var html = '';
+  html += '<div style="background:var(--cream);padding:14px 18px;border-radius:8px;margin-bottom:14px;border-left:3px solid var(--gold);">';
+  html += '<strong>' + rows.length + ' pacienti</strong> cu cereri la <strong>' + esc(lab) + '</strong> pentru data <strong>' + esc(borderouState.selectedDate) + '</strong>.';
+  if (!hasTemplate) {
+    html += '<div style="margin-top:8px;color:var(--accent);"><strong>⚠ Template indisponibil pentru ' + esc(lab) + '.</strong> Borderourile sunt momentan disponibile doar pentru: ' + BORDEROU_TEMPLATES.join(", ") + '.</div>';
+  }
+  html += '</div>';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html += '<thead><tr style="background:var(--ink);color:var(--paper);">';
+  html += '<th style="padding:8px;text-align:left;">Pacient</th>';
+  html += '<th style="padding:8px;">CNP</th>';
+  html += '<th style="padding:8px;">HLG</th><th style="padding:8px;">COAG</th><th style="padding:8px;">VSH</th>';
+  html += '<th style="padding:8px;">BCH</th><th style="padding:8px;">URINA</th><th style="padding:8px;">FECALE</th>';
+  html += '<th style="padding:8px;">EXSUDAT</th><th style="padding:8px;">LAME</th><th style="padding:8px;">ALTELE</th>';
+  html += '</tr></thead><tbody>';
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    html += '<tr style="border-bottom:1px solid rgba(15,17,23,0.08);">';
+    html += '<td style="padding:8px;">' + esc((r.prenume + " " + r.nume).trim() || "—") + '</td>';
+    html += '<td style="padding:8px;font-family:monospace;">' + esc(r.cnp) + '</td>';
+    var colKeys = ["HLG","COAG","VSH","BCH","URINA","FECALE","TEXUDA","LAME","ALTELE"];
+    for (var k = 0; k < colKeys.length; k++) {
+      html += '<td style="padding:8px;text-align:center;' + (r.cols[colKeys[k]] ? "color:var(--gold);font-weight:700;" : "color:rgba(15,17,23,0.2);") + '">' + (r.cols[colKeys[k]] ? "✓" : "") + '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  listEl.innerHTML = html;
+}
+
+// ─── PDF generation ───
+// Helper: strip Romanian diacritics for jsPDF (Helvetica fonts handle only Latin1)
+function stripDiacritics(s) {
+  if (!s) return "";
+  return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function generateBorderouPDF() {
+  var lab = borderouState.selectedLab;
+  if (!lab) { alert("Alege un laborator."); return; }
+  if (BORDEROU_TEMPLATES.indexOf(lab) === -1) {
+    alert("Template indisponibil pentru " + lab + ".\nMomentan disponibile: " + BORDEROU_TEMPLATES.join(", ") + ".");
+    return;
+  }
+  var rows = buildBorderouRows();
+  if (rows.length === 0) {
+    alert("Nu sunt cereri pentru " + lab + " in ziua aleasa.");
+    return;
+  }
+  if (lab === "Derzelius") generatePDFDerzelius(rows);
+  else if (lab === "Poliana") generatePDFPoliana(rows);
+  else if (SANTE_TEMPLATE_LABS.indexOf(lab) !== -1) generatePDFSante(rows, lab);
+  else alert("Template indisponibil pentru " + lab + ".");
+}
+
+function _dateRO(iso) {
+  // Convert YYYY-MM-DD to DD.MM.YYYY
+  if (!iso || iso.length < 10) return iso || "";
+  var parts = iso.substring(0, 10).split("-");
+  return parts[2] + "." + parts[1] + "." + parts[0];
+}
+
+function generatePDFDerzelius(rows) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  var dateStr = _dateRO(borderouState.selectedDate);
+
+  // Header
+  doc.setFontSize(13);
+  doc.setFont("helvetica", "bold");
+  doc.text("FORMULAR RECOLTARE TRANSPORT", 148, 15, { align: "center" });
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text("CLINICA CENTRAL", 14, 24);
+  doc.text("CENTRU CERCETARE MEDICALA DERZELIUS", 282, 24, { align: "right" });
+  doc.text("Data: " + dateStr, 250, 15);
+
+  // Build table
+  var head = [["NUME PACIENT", "ID", "HLG", "COAG", "VSH", "BCH", "URINA", "FECALE", "T.EXUDA", "ALTELE", "DATA", "TEMP", "SEMNATURA\nPREDARE", "SEMNATURA\nPRIMIRE"]];
+  var body = rows.map(function(r) {
+    var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+    return [
+      name,
+      stripDiacritics(r.cnp || ""),
+      r.cols.HLG ? "X" : "",
+      r.cols.COAG ? "X" : "",
+      r.cols.VSH ? "X" : "",
+      r.cols.BCH ? "X" : "",
+      r.cols.URINA ? "X" : "",
+      r.cols.FECALE ? "X" : "",
+      r.cols.TEXUDA ? "X" : "",
+      r.cols.ALTELE ? "X" : "",
+      _dateRO(r.created_at),
+      "",  // TEMP — manual
+      "",  // Semnatura predare — manual
+      ""   // Semnatura primire — manual
+    ];
+  });
+
+  doc.autoTable({
+    head: head, body: body,
+    startY: 30,
+    theme: "grid",
+    styles: { fontSize: 8, cellPadding: 2, lineColor: [50,50,50], lineWidth: 0.1 },
+    headStyles: { fillColor: [240,240,240], textColor: [0,0,0], fontStyle: "bold", halign: "center" },
+    columnStyles: {
+      0: { cellWidth: 38 },
+      1: { cellWidth: 18, halign: "center" },
+      2: { cellWidth: 12, halign: "center" }, 3: { cellWidth: 12, halign: "center" },
+      4: { cellWidth: 12, halign: "center" }, 5: { cellWidth: 12, halign: "center" },
+      6: { cellWidth: 14, halign: "center" }, 7: { cellWidth: 14, halign: "center" },
+      8: { cellWidth: 14, halign: "center" }, 9: { cellWidth: 14, halign: "center" },
+      10: { cellWidth: 20, halign: "center" }, 11: { cellWidth: 14, halign: "center" },
+      12: { cellWidth: 25 }, 13: { cellWidth: 25 }
+    }
+  });
+
+  // Add empty rows for any "Altele" details at the bottom (optional)
+  var hasAltele = rows.some(function(r){ return r.altele_names.length > 0; });
+  if (hasAltele) {
+    var y = doc.lastAutoTable.finalY + 6;
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.text("ALTELE (detaliere):", 14, y);
+    doc.setFont("helvetica", "normal");
+    y += 5;
+    rows.forEach(function(r) {
+      if (r.altele_names.length > 0) {
+        var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+        var line = name + " (" + stripDiacritics(r.cnp) + "): " + stripDiacritics(r.altele_names.join(", "));
+        var split = doc.splitTextToSize(line, 270);
+        doc.text(split, 14, y);
+        y += split.length * 4;
+      }
+    });
+  }
+
+  var filename = "borderou_Derzelius_" + borderouState.selectedDate + ".pdf";
+  doc.save(filename);
+}
+
+function generatePDFSante(rows, labName) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  var dateStr = _dateRO(borderouState.selectedDate);
+  // Default to "Clinica Sante" if not provided (backwards compat)
+  var displayLabName = labName || "Clinica Sante";
+
+  // Header
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text(stripDiacritics(displayLabName).toUpperCase(), 14, 14);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.text("LAM. Pitesti", 14, 19);
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "bold");
+  doc.text("REGISTRU PREDARE-PRIMIRE PROBE RECOLTATE", 148, 14, { align: "center" });
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text("DATA: " + dateStr, 14, 26);
+  doc.text("Punct de recoltare: Clinica Central", 80, 26);
+
+  // Table head per Sante template
+  var head = [["NUME/PRENUME PACIENT","Ora\nrecoltarii","B","H","V","C","F","CO","U","L","ALTE","Ora\npreluare\ndin\ncabinet","t°\npreluare\ndin\ncabinet","Resp\npredare din\ncabinet\n(nume/sem)","Resp\nprimire\n(nume/sem)","t° predare\n(din lada/\nfrigider\ntransport)\nAUTO NR","Resp. triaj\n(nume/sem)\nORA PRIMIRII","Ora\nsosire\nin lab.","Resp.\npreluare\nin lab\n(nume/sem)","OBS"]];
+  // Sante: B=biochimie, H=hemoleucograma, V=VSH, C=coagulare, F=exudat faringian, CO=coprorecolt, U=urina, L=lame
+  var body = rows.map(function(r) {
+    var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+    return [
+      name,
+      "",  // Ora recoltarii - manual
+      r.cols.BCH ? "X" : "",
+      r.cols.HLG ? "X" : "",
+      r.cols.VSH ? "X" : "",
+      r.cols.COAG ? "X" : "",
+      r.cols.TEXUDA ? "X" : "",
+      r.cols.FECALE ? "X" : "",
+      r.cols.URINA ? "X" : "",
+      r.cols.LAME ? "X" : "",
+      r.cols.ALTELE ? "X" : "",
+      "", "", "", "", "", "", "", "", ""  // Manual semnaturi/timpi
+    ];
+  });
+
+  doc.autoTable({
+    head: head, body: body,
+    startY: 30,
+    theme: "grid",
+    styles: { fontSize: 6.5, cellPadding: 1.2, lineColor: [50,50,50], lineWidth: 0.1, valign: "middle" },
+    headStyles: { fillColor: [240,240,240], textColor: [0,0,0], fontStyle: "bold", halign: "center", fontSize: 6.5 },
+    columnStyles: {
+      0: { cellWidth: 30 }, 1: { cellWidth: 12, halign: "center" },
+      2: { cellWidth: 7, halign: "center" }, 3: { cellWidth: 7, halign: "center" }, 4: { cellWidth: 7, halign: "center" },
+      5: { cellWidth: 7, halign: "center" }, 6: { cellWidth: 7, halign: "center" }, 7: { cellWidth: 9, halign: "center" },
+      8: { cellWidth: 7, halign: "center" }, 9: { cellWidth: 7, halign: "center" }, 10: { cellWidth: 11, halign: "center" },
+      11: { cellWidth: 14 }, 12: { cellWidth: 12 }, 13: { cellWidth: 18 }, 14: { cellWidth: 18 },
+      15: { cellWidth: 16 }, 16: { cellWidth: 18 }, 17: { cellWidth: 12 }, 18: { cellWidth: 16 }, 19: { cellWidth: 14 }
+    }
+  });
+
+  // Footer with legend
+  var y = doc.lastAutoTable.finalY + 6;
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.text("Nota:", 14, y);
+  doc.setFont("helvetica", "normal");
+  y += 4;
+  var legend = [
+    "B - vacutainer biochimie",
+    "H - vacutainer hemoleucograma",
+    "V - vacutainer VSH",
+    "C - vacutainer coagulare",
+    "F - exudat faringian",
+    "CO - coprorecoltoare",
+    "U - recipiente urina",
+    "L - lame"
+  ];
+  legend.forEach(function(line) { doc.text(line, 14, y); y += 3.5; });
+
+  // Altele detalii
+  var hasAltele = rows.some(function(r){ return r.altele_names.length > 0; });
+  if (hasAltele) {
+    y += 3;
+    doc.setFont("helvetica", "bold");
+    doc.text("ALTELE (detaliere):", 14, y);
+    doc.setFont("helvetica", "normal");
+    y += 4;
+    rows.forEach(function(r) {
+      if (r.altele_names.length > 0) {
+        var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+        var line = name + ": " + stripDiacritics(r.altele_names.join(", "));
+        var split = doc.splitTextToSize(line, 270);
+        doc.text(split, 14, y);
+        y += split.length * 3.5;
+      }
+    });
+  }
+
+  // Filename: normalize lab name (no spaces, no diacritics)
+  var safeLabName = stripDiacritics(displayLabName).replace(/\s+/g, "");
+  var filename = "borderou_" + safeLabName + "_" + borderouState.selectedDate + ".pdf";
+  doc.save(filename);
+}
+
+function generatePDFPoliana(rows) {
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  var dateStr = _dateRO(borderouState.selectedDate);
+
+  // Header
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("CENTRELE MEDICALE POLIANA S.R.L.", 14, 14);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.text("PG-CMP-7.2 / FG-CMP-7.2-02, Ed. 05.01.2026", 220, 14);
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "bold");
+  doc.text("FORMULAR DE INSOTIRE PROBE BIOLOGICE - CENTRELE MEDICALE POLIANA S.R.L.", 148, 20, { align: "center" });
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text("Punct recoltare: Clinica Central", 14, 28);
+  doc.text("Recoltat de: _______________________", 80, 28);
+  doc.text("Semnatura: _______________________", 160, 28);
+  doc.text("Data: " + dateStr, 240, 28);
+
+  // Poliana columns: Nr.Crt | Ora recoltare | ID Pacient | Nume Prenume | HLG | VSH | BIOCHIMIE | COAGULARE | SUMAR/UROCULTURA | Exudate/Tampoane/secretii | Coproparazit/coprocultura | Lame | Babes Lichid/HPV | EDTA dop sidef | Semnatura Asistent
+  var head = [[
+    "Nr.\nCrt.", "Ora\nrecoltare", "ID Pacient", "Nume Prenume pacient",
+    "HLG", "VSH", "BIOCHIMIE", "COAGULARE", "SUMAR/\nUROCULTURA",
+    "Exudate/\nTampoane/\nsecretii", "Coproparazit/\ncoprocultura", "Lame",
+    "Babes\nLichid/\nHPV", "EDTA\ndop sidef\n(viremii)", "Semnatura\nAsistent\nrecoltare"
+  ]];
+  var body = rows.map(function(r, idx) {
+    var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+    return [
+      String(idx + 1),
+      "",  // Ora - manual
+      stripDiacritics(r.cnp || ""),
+      name,
+      r.cols.HLG ? "X" : "",
+      r.cols.VSH ? "X" : "",
+      r.cols.BCH ? "X" : "",
+      r.cols.COAG ? "X" : "",
+      r.cols.URINA ? "X" : "",
+      r.cols.TEXUDA ? "X" : "",
+      r.cols.FECALE ? "X" : "",
+      r.cols.LAME ? "X" : "",
+      "",
+      r.cols.ALTELE ? "X" : "",
+      ""   // Semnatura - manual
+    ];
+  });
+
+  doc.autoTable({
+    head: head, body: body,
+    startY: 33,
+    theme: "grid",
+    styles: { fontSize: 7, cellPadding: 1.5, lineColor: [50,50,50], lineWidth: 0.1, valign: "middle" },
+    headStyles: { fillColor: [240,240,240], textColor: [0,0,0], fontStyle: "bold", halign: "center", fontSize: 7 },
+    columnStyles: {
+      0: { cellWidth: 9, halign: "center" }, 1: { cellWidth: 14, halign: "center" },
+      2: { cellWidth: 22, halign: "center" }, 3: { cellWidth: 38 },
+      4: { cellWidth: 12, halign: "center" }, 5: { cellWidth: 12, halign: "center" },
+      6: { cellWidth: 16, halign: "center" }, 7: { cellWidth: 16, halign: "center" },
+      8: { cellWidth: 18, halign: "center" }, 9: { cellWidth: 18, halign: "center" },
+      10: { cellWidth: 20, halign: "center" }, 11: { cellWidth: 12, halign: "center" },
+      12: { cellWidth: 14, halign: "center" }, 13: { cellWidth: 16, halign: "center" },
+      14: { cellWidth: 25 }
+    }
+  });
+
+  // Footer
+  var y = doc.lastAutoTable.finalY + 8;
+  doc.setFontSize(9);
+  doc.text("Ora predarii probelor catre curier: _______", 14, y);
+  doc.text("Temperatura in geanta la predare: _______", 100, y);
+  doc.text("Semnatura predare probe catre curier: _______", 190, y);
+  y += 6;
+  doc.text("Curier: Tudorache Ilie Andrei", 14, y);
+  y += 6;
+  doc.text("Ora primirii probelor in laborator: _______", 14, y);
+  doc.text("Temperatura in geanta la primire: _______", 100, y);
+  doc.text("Semnatura primire probe in laborator: _______", 190, y);
+
+  // Altele detalii
+  var hasAltele = rows.some(function(r){ return r.altele_names.length > 0; });
+  if (hasAltele) {
+    y += 10;
+    doc.setFont("helvetica", "bold");
+    doc.text("ALTELE (detaliere):", 14, y);
+    doc.setFont("helvetica", "normal");
+    y += 4;
+    rows.forEach(function(r) {
+      if (r.altele_names.length > 0) {
+        var name = stripDiacritics(((r.prenume + " " + r.nume).trim()) || "—");
+        var line = name + ": " + stripDiacritics(r.altele_names.join(", "));
+        var split = doc.splitTextToSize(line, 270);
+        doc.text(split, 14, y);
+        y += split.length * 3.5;
+      }
+    });
+  }
+
+  var filename = "borderou_Poliana_" + borderouState.selectedDate + ".pdf";
+  doc.save(filename);
+}
+
+// Event wiring
+document.getElementById("borderouFilterDate").addEventListener("change", function(e) {
+  borderouState.selectedDate = e.target.value;
+  updateBorderouLabsDropdown();
+});
+document.getElementById("borderouFilterDateField").addEventListener("change", function(e) {
+  borderouState.dateField = e.target.value;
+  updateBorderouLabsDropdown();
+});
+document.getElementById("borderouFilterLab").addEventListener("change", function(e) {
+  borderouState.selectedLab = e.target.value;
+  renderBorderouPreview();
+});
+document.getElementById("btnBorderouGenerate").addEventListener("click", generateBorderouPDF);
+
+// ════════════════════════════════════════════════════════════════
+// ADMIN PRETURI CC
+// ════════════════════════════════════════════════════════════════
+
+var adminState = {
+  loaded: false,
+  list: [],
+  filter: "",
+  editingId: null  // null = add new, else = id of pret being edited
+};
+
+// Show/hide admin tab based on is_admin flag
+function setupAdminTabVisibility() {
+  var info = window.__CURRENT_USER_INFO__;
+  var isAdmin = !!(info && info.is_admin === true);
+  var tab = document.getElementById("tabAdmin");
+  if (tab) tab.style.display = isAdmin ? "" : "none";
+}
+
+// Normalize text the same way the DB function does
+function normForDb(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[ăâîșțĂÂÎȘȚ]/g, function(c) {
+      return { "ă": "a", "â": "a", "î": "i", "ș": "s", "ț": "t", "Ă": "a", "Â": "a", "Î": "i", "Ș": "s", "Ț": "t" }[c];
+    })
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function loadAdminPreturi() {
+  var tbody = document.getElementById("adminTableBody");
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Se incarca preturile...</td></tr>';
+  try {
+    // Supabase has a default 1000-row cap; paginate to fetch all.
+    var all = [];
+    var pageSize = 1000;
+    var page = 0;
+    while (true) {
+      var from = page * pageSize;
+      var to = from + pageSize - 1;
+      var res = await window.sb.from("cc_preturi")
+        .select("id, denumire, denumire_norm, pret, activ, updated_at, updated_by")
+        .order("denumire", { ascending: true })
+        .range(from, to);
+      if (res.error) {
+        tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Eroare: ' + esc(res.error.message) + '</td></tr>';
+        return;
+      }
+      if (!Array.isArray(res.data) || res.data.length === 0) break;
+      all = all.concat(res.data);
+      if (res.data.length < pageSize) break;
+      page++;
+      if (page > 50) break;  // safety
+    }
+    adminState.list = all;
+    adminState.loaded = true;
+    renderAdminTable();
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Eroare: ' + esc(String(e)) + '</td></tr>';
+  }
+}
+
+function renderAdminTable() {
+  var tbody = document.getElementById("adminTableBody");
+  var countEl = document.getElementById("adminCount");
+  if (!tbody) return;
+  var filter = (adminState.filter || "").toLowerCase().trim();
+  var filtered = adminState.list;
+  if (filter) {
+    filtered = filtered.filter(function(p) {
+      return (p.denumire || "").toLowerCase().indexOf(filter) !== -1
+        || (p.denumire_norm || "").toLowerCase().indexOf(filter) !== -1;
+    });
+  }
+  if (countEl) {
+    countEl.textContent = filtered.length + " / " + adminState.list.length + " preturi";
+  }
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="admin-loading">Niciun pret gasit.</td></tr>';
+    return;
+  }
+  var html = "";
+  for (var i = 0; i < filtered.length; i++) {
+    var p = filtered[i];
+    var updatedAt = p.updated_at ? new Date(p.updated_at).toLocaleString("ro-RO", { dateStyle: "short", timeStyle: "short" }) : "—";
+    html += '<tr' + (p.activ ? '' : ' class="inactive"') + ' data-id="' + p.id + '">' +
+      '<td>' + esc(p.denumire) + '</td>' +
+      '<td class="pret-val">' + Number(p.pret).toFixed(2) + '</td>' +
+      '<td>' + (p.activ ? '✓' : '—') + '</td>' +
+      '<td class="meta-small">' + updatedAt + '</td>' +
+      '<td class="row-actions"><button type="button" class="row-edit-btn" data-edit-id="' + p.id + '">Editeaza</button></td>' +
+      '</tr>';
+  }
+  tbody.innerHTML = html;
+  // Wire up edit buttons
+  var btns = tbody.querySelectorAll(".row-edit-btn");
+  for (var j = 0; j < btns.length; j++) {
+    btns[j].addEventListener("click", function(e) {
+      var id = parseInt(e.target.getAttribute("data-edit-id"), 10);
+      openAdminEditModal(id);
+    });
+  }
+}
+
+function openAdminEditModal(id) {
+  var modal = document.getElementById("adminEditModal");
+  var title = document.getElementById("adminEditTitle");
+  var dInput = document.getElementById("adminEditDenumire");
+  var pInput = document.getElementById("adminEditPret");
+  var aInput = document.getElementById("adminEditActiv");
+  var delBtn = document.getElementById("adminEditDelete");
+  var errEl = document.getElementById("adminEditError");
+
+  errEl.classList.remove("visible");
+  errEl.textContent = "";
+
+  if (id) {
+    var item = adminState.list.find(function(x) { return x.id === id; });
+    if (!item) return;
+    adminState.editingId = id;
+    title.textContent = "Editeaza pret";
+    dInput.value = item.denumire || "";
+    pInput.value = Number(item.pret).toFixed(2);
+    aInput.checked = !!item.activ;
+    delBtn.style.display = "";
+  } else {
+    adminState.editingId = null;
+    title.textContent = "Adauga pret nou";
+    dInput.value = "";
+    pInput.value = "";
+    aInput.checked = true;
+    delBtn.style.display = "none";
+  }
+  modal.classList.add("visible");
+  setTimeout(function() { dInput.focus(); }, 50);
+}
+
+function closeAdminEditModal() {
+  document.getElementById("adminEditModal").classList.remove("visible");
+  adminState.editingId = null;
+}
+
+async function saveAdminEdit() {
+  var dInput = document.getElementById("adminEditDenumire");
+  var pInput = document.getElementById("adminEditPret");
+  var aInput = document.getElementById("adminEditActiv");
+  var errEl = document.getElementById("adminEditError");
+  var saveBtn = document.getElementById("adminEditSave");
+
+  var denumire = dInput.value.trim();
+  var pret = parseFloat(pInput.value);
+  var activ = !!aInput.checked;
+
+  if (!denumire) {
+    errEl.textContent = "Denumirea e obligatorie.";
+    errEl.classList.add("visible");
+    return;
+  }
+  if (isNaN(pret) || pret < 0) {
+    errEl.textContent = "Pretul e invalid.";
+    errEl.classList.add("visible");
+    return;
+  }
+
+  errEl.classList.remove("visible");
+  saveBtn.disabled = true;
+  saveBtn.textContent = "Se salveaza...";
+
+  var denumireNorm = normForDb(denumire);
+  var userId = window.__CURRENT_USER__ ? window.__CURRENT_USER__.id : null;
+
+  try {
+    var res;
+    if (adminState.editingId) {
+      res = await window.sb.from("cc_preturi")
+        .update({ denumire: denumire, denumire_norm: denumireNorm, pret: pret, activ: activ, updated_by: userId })
+        .eq("id", adminState.editingId)
+        .select();
+    } else {
+      res = await window.sb.from("cc_preturi")
+        .insert([{ denumire: denumire, denumire_norm: denumireNorm, pret: pret, activ: activ, updated_by: userId }])
+        .select();
+    }
+    if (res.error) {
+      errEl.textContent = "Eroare: " + (res.error.message || res.error);
+      errEl.classList.add("visible");
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Salveaza";
+      return;
+    }
+    closeAdminEditModal();
+    // Update in-memory cache
+    if (activ) {
+      PRETURI_CC[denumireNorm] = pret;
+    } else {
+      delete PRETURI_CC[denumireNorm];
+    }
+    await loadAdminPreturi();
+  } catch (e) {
+    errEl.textContent = "Eroare: " + String(e.message || e);
+    errEl.classList.add("visible");
+  }
+  saveBtn.disabled = false;
+  saveBtn.textContent = "Salveaza";
+}
+
+async function deleteAdminEdit() {
+  if (!adminState.editingId) return;
+  if (!confirm("Esti sigur ca vrei sa stergi acest pret? Actiunea nu poate fi anulata.")) return;
+  var item = adminState.list.find(function(x) { return x.id === adminState.editingId; });
+  try {
+    var res = await window.sb.from("cc_preturi")
+      .delete()
+      .eq("id", adminState.editingId);
+    if (res.error) {
+      alert("Eroare la stergere: " + res.error.message);
+      return;
+    }
+    if (item) delete PRETURI_CC[item.denumire_norm];
+    closeAdminEditModal();
+    await loadAdminPreturi();
+  } catch (e) {
+    alert("Eroare: " + String(e.message || e));
+  }
+}
+
+// Wire up admin events
+(function() {
+  setupAdminTabVisibility();
+
+  var searchEl = document.getElementById("adminSearch");
+  if (searchEl) {
+    searchEl.addEventListener("input", function(e) {
+      adminState.filter = e.target.value;
+      renderAdminTable();
+    });
+  }
+  var addBtn = document.getElementById("adminBtnAdd");
+  if (addBtn) addBtn.addEventListener("click", function() { openAdminEditModal(null); });
+  var closeBtn = document.getElementById("adminEditClose");
+  if (closeBtn) closeBtn.addEventListener("click", closeAdminEditModal);
+  var cancelBtn = document.getElementById("adminEditCancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", closeAdminEditModal);
+  var saveBtn = document.getElementById("adminEditSave");
+  if (saveBtn) saveBtn.addEventListener("click", saveAdminEdit);
+  var delBtn = document.getElementById("adminEditDelete");
+  if (delBtn) delBtn.addEventListener("click", deleteAdminEdit);
+  var modal = document.getElementById("adminEditModal");
+  if (modal) modal.addEventListener("click", function(e) {
+    if (e.target === modal) closeAdminEditModal();
+  });
+
+  // Export buttons
+  var exportPdfBtn = document.getElementById("adminBtnExportPdf");
+  if (exportPdfBtn) exportPdfBtn.addEventListener("click", exportAdminPreturiPdf);
+  var exportXlsxBtn = document.getElementById("adminBtnExportXlsx");
+  if (exportXlsxBtn) exportXlsxBtn.addEventListener("click", exportAdminPreturiXlsx);
+})();
+
+// Returns the items that should be exported: respects current search filter
+function getAdminItemsForExport() {
+  var filter = (adminState.filter || "").toLowerCase().trim();
+  var list = adminState.list;
+  if (filter) {
+    list = list.filter(function(p) {
+      return (p.denumire || "").toLowerCase().indexOf(filter) !== -1
+        || (p.denumire_norm || "").toLowerCase().indexOf(filter) !== -1;
+    });
+  }
+  return list;
+}
+
+function exportAdminPreturiXlsx() {
+  var items = getAdminItemsForExport();
+  if (!items.length) { alert("Nu sunt preturi de exportat."); return; }
+
+  var rows = items.map(function(p) {
+    return {
+      "Denumire": p.denumire || "",
+      "Pret (RON)": Number(p.pret),
+      "Activ": p.activ ? "DA" : "NU",
+      "Ultima modificare": p.updated_at ? new Date(p.updated_at).toLocaleString("ro-RO") : ""
+    };
+  });
+
+  var ws = XLSX.utils.json_to_sheet(rows);
+  // Column widths
+  ws['!cols'] = [
+    { wch: 60 }, // Denumire
+    { wch: 12 }, // Pret
+    { wch: 8 },  // Activ
+    { wch: 20 }  // Ultima modificare
+  ];
+
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Preturi CC");
+
+  var d = new Date();
+  var fname = "Preturi_Clinica_Central_" + d.getFullYear() +
+              "-" + String(d.getMonth() + 1).padStart(2, "0") +
+              "-" + String(d.getDate()).padStart(2, "0") + ".xlsx";
+  XLSX.writeFile(wb, fname);
+}
+
+function exportAdminPreturiPdf() {
+  var items = getAdminItemsForExport();
+  if (!items.length) { alert("Nu sunt preturi de exportat."); return; }
+
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  var pageW = doc.internal.pageSize.getWidth();
+  var pageH = doc.internal.pageSize.getHeight();
+  var margin = 14;
+
+  // Header: small black square with logo + title
+  var logoSize = 18;
+  doc.setFillColor(15, 17, 23);
+  doc.roundedRect(margin, margin, logoSize, logoSize, 2, 2, "F");
+  try {
+    var logo = getLogoForPdf();
+    if (logo && logo.dataUrl) {
+      doc.addImage(logo.dataUrl, "JPEG", margin + 2, margin + 2, logoSize - 4, logoSize - 4);
+    }
+  } catch (e) {}
+
+  // Title
+  doc.setTextColor(15, 17, 23);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.text("CLINICA CENTRAL", margin + logoSize + 6, margin + 7);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(184, 151, 58);
+  doc.text("Preturi catalog Clinica Central", margin + logoSize + 6, margin + 13);
+
+  // Meta line (date + total)
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  var d = new Date();
+  var dateStr = d.toLocaleDateString("ro-RO") + " " + d.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" });
+  var metaText = "Generat: " + dateStr + "  -  Total preturi: " + items.length;
+  doc.text(metaText, pageW - margin, margin + 7, { align: "right" });
+  if (adminState.filter) {
+    doc.text("Filtru: \"" + adminState.filter + "\"", pageW - margin, margin + 11, { align: "right" });
+  }
+
+  // Gold rule under header
+  doc.setDrawColor(184, 151, 58);
+  doc.setLineWidth(0.5);
+  doc.line(margin, margin + logoSize + 4, pageW - margin, margin + logoSize + 4);
+
+  // Build table data
+  var head = [["#", "Denumire", "Pret (RON)", "Activ"]];
+  var body = items.map(function(p, i) {
+    return [
+      String(i + 1),
+      p.denumire || "",
+      Number(p.pret).toFixed(2),
+      p.activ ? "DA" : "NU"
+    ];
+  });
+
+  doc.autoTable({
+    head: head,
+    body: body,
+    startY: margin + logoSize + 10,
+    margin: { left: margin, right: margin },
+    theme: "plain",
+    styles: {
+      font: "helvetica",
+      fontSize: 9,
+      cellPadding: { top: 2.5, right: 4, bottom: 2.5, left: 4 },
+      textColor: [15, 17, 23],
+      lineColor: [220, 215, 200],
+      lineWidth: 0.1
+    },
+    headStyles: {
+      fillColor: [15, 17, 23],
+      textColor: [184, 151, 58],
+      fontStyle: "bold",
+      fontSize: 8.5
+    },
+    columnStyles: {
+      0: { cellWidth: 12, halign: "right", textColor: [120, 120, 120] },
+      1: { cellWidth: "auto" },
+      2: { cellWidth: 28, halign: "right", fontStyle: "bold" },
+      3: { cellWidth: 16, halign: "center" }
+    },
+    alternateRowStyles: { fillColor: [248, 246, 241] },
+    didDrawCell: function(data) {
+      // Hairline borders under each row
+      if (data.section === "body" && data.column.index === 0) {
+        // already styled via lineWidth
+      }
+    },
+    didDrawPage: function(data) {
+      // Footer page number
+      var pageCount = doc.internal.getNumberOfPages();
+      var current = data.pageNumber;
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text("Pagina " + current + " din " + pageCount, pageW - margin, pageH - 8, { align: "right" });
+      doc.text("Clinica Central - Pitesti", margin, pageH - 8);
+    }
+  });
+
+  var fname = "Preturi_Clinica_Central_" + d.getFullYear() +
+              "-" + String(d.getMonth() + 1).padStart(2, "0") +
+              "-" + String(d.getDate()).padStart(2, "0") + ".pdf";
+  doc.save(fname);
+}

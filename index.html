@@ -10,6 +10,9 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.0/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 <body>
@@ -27,6 +30,8 @@
       <button class="topbar-tab active" data-view="cart" role="tab" aria-selected="true">Cerere analize</button>
       <button class="topbar-tab" data-view="browse" role="tab" aria-selected="false">Explorator preturi</button>
       <button class="topbar-tab" data-view="istoric" role="tab" aria-selected="false">Istoric cereri</button>
+      <button class="topbar-tab" data-view="borderouri" role="tab" aria-selected="false">Borderouri</button>
+      <button class="topbar-tab admin-only" data-view="admin" role="tab" aria-selected="false" id="tabAdmin" style="display:none">Admin preturi</button>
     </nav>
     <div class="topbar-user">
       <span id="topbarUserEmail"></span>
@@ -94,6 +99,10 @@
           <span class="scan-icon">&#128247;</span>
           <span>Scaneaza bilet de trimitere</span>
         </button>
+        <button type="button" class="scan-btn scan-btn-pair" id="btnPairPhone">
+          <span class="scan-icon">&#128241;</span>
+          <span>Conecteaza telefon pentru scanare</span>
+        </button>
       </div>
 
       <div class="search-area">
@@ -123,15 +132,20 @@
 
       <div class="cart-footer">
         <div class="eprubete-summary" id="eprubeteSummary" style="display:none">
-          <div class="eprubete-label">Eprubete necesare</div>
+          <button type="button" class="eprubete-toggle" id="eprubeteToggle" aria-expanded="true">
+            <span class="eprubete-label">Eprubete necesare</span>
+            <span class="eprubete-toggle-icon">&#9662;</span>
+          </button>
           <ul class="eprubete-list" id="eprubeteList"></ul>
         </div>
-        <div class="cart-totals">
-          <span class="cart-totals-label">Total estimativ</span>
-          <span class="cart-totals-value" id="cartTotal">— RON</span>
+        <div class="cart-action-sticky">
+          <div class="cart-totals">
+            <span class="cart-totals-label">Total estimativ</span>
+            <span class="cart-totals-value" id="cartTotal">— RON</span>
+          </div>
+          <button class="cart-btn-process" id="btnProcess" disabled>Proceseaza cererea</button>
+          <button class="cart-btn-clear" id="btnClearCart">Goleste cererea</button>
         </div>
-        <button class="cart-btn-process" id="btnProcess" disabled>Proceseaza cererea</button>
-        <button class="cart-btn-clear" id="btnClearCart">Goleste cererea</button>
 
         <button class="disc-toggle-cart" id="discToggleCart">&#9881; Ajusteaza discount-uri</button>
         <div class="disc-panel-cart" id="discPanelCart"></div>
@@ -273,7 +287,118 @@
   </main>
 </div>
 
-<!-- Modal vizualizare detaliata cerere din istoric -->
+<div class="view" id="viewBorderouri" style="display:none">
+  <main class="main wide">
+    <div class="istoric-header">
+      <div>
+        <div class="pane-label">Borderouri</div>
+        <h2 class="pane-title">Generare borderouri pentru laboratoare</h2>
+        <p class="pane-sub">Selecteaza data si laboratorul. Genereaza un PDF de tip borderou cu toti pacientii / analizele trimise la acel laborator in ziua respectiva.</p>
+      </div>
+    </div>
+
+    <div class="istoric-filters" id="borderouFilters">
+      <div class="istoric-filter">
+        <label for="borderouFilterDate">Data</label>
+        <input type="date" id="borderouFilterDate">
+      </div>
+      <div class="istoric-filter">
+        <label for="borderouFilterDateField">Tip data</label>
+        <select id="borderouFilterDateField" style="padding:8px 10px;border:1.5px solid rgba(15,17,23,0.15);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;">
+          <option value="created_at" selected>Data procesarii (created_at)</option>
+          <option value="data_cerere">Data cererii (data_cerere)</option>
+        </select>
+      </div>
+      <div class="istoric-filter">
+        <label for="borderouFilterLab">Laborator</label>
+        <select id="borderouFilterLab" style="padding:8px 10px;border:1.5px solid rgba(15,17,23,0.15);border-radius:8px;font-family:'DM Sans',sans-serif;font-size:13px;min-width:200px;">
+          <option value="">Selecteaza data intai...</option>
+        </select>
+      </div>
+      <button type="button" class="istoric-btn-clear" id="btnBorderouGenerate" style="background:var(--ink);color:var(--paper);">Genereaza borderou PDF</button>
+    </div>
+
+    <div class="istoric-stats" id="borderouStats"></div>
+
+    <div class="istoric-list" id="borderouPreview">
+      <div class="istoric-loading">Alege data si laboratorul, apoi vezi aici previzualizarea.</div>
+    </div>
+  </main>
+</div>
+
+<!-- ═════════════════════════════════════════════════════════════ -->
+<!-- VIEW 5: ADMIN PRETURI (visible only for is_admin) -->
+<!-- ═════════════════════════════════════════════════════════════ -->
+<div class="view" id="viewAdmin" style="display:none">
+  <main class="main wide">
+    <div class="istoric-header">
+      <div>
+        <div class="pane-label">Admin</div>
+        <h2 class="pane-title">Gestiune preturi Clinica Central</h2>
+        <p class="pane-sub">Editeaza, adauga sau dezactiveaza preturi. Modificarile sunt vizibile imediat in aplicatie. Cauta cu numele analizei (case-insensitive).</p>
+      </div>
+    </div>
+
+    <div class="admin-toolbar">
+      <input type="text" id="adminSearch" class="admin-search" placeholder="Cauta analiza...">
+      <button type="button" class="admin-btn-add" id="adminBtnAdd">+ Adauga pret nou</button>
+      <button type="button" class="admin-btn-export" id="adminBtnExportPdf">Export PDF</button>
+      <button type="button" class="admin-btn-export" id="adminBtnExportXlsx">Export Excel</button>
+      <span class="admin-count" id="adminCount"></span>
+    </div>
+
+    <div class="admin-table-wrap">
+      <table class="admin-table" id="adminTable">
+        <thead>
+          <tr>
+            <th>Denumire</th>
+            <th>Pret (RON)</th>
+            <th>Activ</th>
+            <th>Ultima modificare</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="adminTableBody">
+          <tr><td colspan="5" class="admin-loading">Se incarca preturile...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+<!-- Modal: edit/add pret -->
+<div class="modal-overlay" id="adminEditModal">
+  <div class="modal-box admin-edit-box">
+    <button class="modal-close" id="adminEditClose" type="button" aria-label="Inchide">&times;</button>
+    <div class="modal-header">
+      <div class="modal-tag">Admin preturi</div>
+      <h2 class="modal-title" id="adminEditTitle">Editeaza pret</h2>
+    </div>
+    <div class="modal-body">
+      <div class="admin-form">
+        <label class="admin-label" for="adminEditDenumire">Denumire analiza</label>
+        <input type="text" class="admin-input" id="adminEditDenumire" placeholder="Ex: Glicemie">
+        <small class="admin-hint">Va fi normalizata automat pentru cautare.</small>
+
+        <label class="admin-label" for="adminEditPret" style="margin-top:16px">Pret (RON)</label>
+        <input type="number" class="admin-input" id="adminEditPret" step="0.01" min="0" placeholder="0.00">
+
+        <label class="admin-checkbox" style="margin-top:16px">
+          <input type="checkbox" id="adminEditActiv" checked>
+          <span>Pretul e activ (vizibil in aplicatie)</span>
+        </label>
+
+        <div id="adminEditError" class="admin-error"></div>
+
+        <div class="admin-form-actions">
+          <button type="button" class="admin-btn-cancel" id="adminEditCancel">Anuleaza</button>
+          <button type="button" class="admin-btn-delete" id="adminEditDelete" style="display:none">Sterge</button>
+          <button type="button" class="admin-btn-save" id="adminEditSave">Salveaza</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="modal-overlay" id="istoricDetailModal">
   <div class="modal-box istoric-detail-box">
     <button class="modal-close" id="istoricDetailClose" type="button" aria-label="Inchide">&times;</button>
@@ -362,6 +487,40 @@
   </div>
 </div>
 
+<!-- Phone pairing modal -->
+<div class="modal-overlay" id="pairModal">
+  <div class="modal-box pair-box">
+    <button class="modal-close" id="pairModalClose" type="button" aria-label="Inchide">&times;</button>
+    <div class="modal-header">
+      <div class="modal-tag">Conectare telefon</div>
+      <h2 class="modal-title">Scaneaza codul cu telefonul</h2>
+      <p class="pair-sub">Deschide camera native sau orice scaner QR pe telefon si indrepta camera spre codul de mai jos. Browser-ul de pe telefon se va deschide automat.</p>
+    </div>
+    <div class="modal-body">
+      <div id="pairLoading" class="pair-loading">
+        <div class="scan-spinner"></div>
+        <div>Se pregateste sesiunea...</div>
+      </div>
+      <div id="pairContent" style="display:none">
+        <div class="pair-qr-container">
+          <div id="pairQrCanvas" class="pair-qr-canvas"></div>
+          <div class="pair-session-id">
+            Sesiune: <strong id="pairSessionId"></strong>
+          </div>
+        </div>
+        <div class="pair-status" id="pairStatus">
+          <div class="pair-status-dot" id="pairStatusDot"></div>
+          <span id="pairStatusText">Astept telefon...</span>
+        </div>
+        <div class="pair-hint">
+          <strong>Important:</strong> Telefonul se deconecteaza dupa 8 ore sau cand inchizi pagina de pe telefon.
+          Sesiunea functioneaza fara probleme pe orice retea (WiFi sau date mobile).
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <footer>
   Clinica Central &bull; Preturi din listele publice &bull; Actualizat <strong>2026</strong> &bull; Verifica intotdeauna pretul direct la laborator
 </footer>
@@ -394,13 +553,14 @@
 
   // 2. Load data
   try {
-    const [dataResp, santeResp, binisanResp, polianaResp, solomedResp, medilabResp] = await Promise.all([
+    const [dataResp, santeResp, binisanResp, polianaResp, solomedResp, medilabResp, ccResp] = await Promise.all([
       fetch("assets/data/analize.json"),
       fetch("assets/data/details_sante.json").catch(() => null),
       fetch("assets/data/details_binisan.json").catch(() => null),
       fetch("assets/data/details_poliana.json").catch(() => null),
       fetch("assets/data/details_solomed.json").catch(() => null),
-      fetch("assets/data/details_medilab.json").catch(() => null)
+      fetch("assets/data/details_medilab.json").catch(() => null),
+      fetch("assets/data/preturi_cc.json").catch(() => null)
     ]);
     window.__ANALIZE_DATA__ = await dataResp.json();
     window.__DETAILS_SANTE__ = santeResp && santeResp.ok ? await santeResp.json() : {};
@@ -408,6 +568,39 @@
     window.__DETAILS_POLIANA__ = polianaResp && polianaResp.ok ? await polianaResp.json() : {};
     window.__DETAILS_SOLOMED__ = solomedResp && solomedResp.ok ? await solomedResp.json() : {};
     window.__DETAILS_MEDILAB__ = medilabResp && medilabResp.ok ? await medilabResp.json() : {};
+
+    // Preturi CC: try Supabase first (live data, admin-editable), fallback to JSON
+    // Supabase has a default 1000-row cap, so we paginate.
+    var preturiFromDb = null;
+    try {
+      var all = [];
+      var pageSize = 1000;
+      var page = 0;
+      while (true) {
+        var from = page * pageSize;
+        var to = from + pageSize - 1;
+        var dbRes = await window.sb.from("cc_preturi")
+          .select("denumire_norm, pret")
+          .eq("activ", true)
+          .range(from, to);
+        if (dbRes.error) { console.warn("[preturi-cc] DB load error:", dbRes.error); preturiFromDb = null; break; }
+        if (!Array.isArray(dbRes.data) || dbRes.data.length === 0) break;
+        all = all.concat(dbRes.data);
+        if (dbRes.data.length < pageSize) break;  // last page
+        page++;
+        if (page > 50) break;  // safety: never more than ~50k rows
+      }
+      if (all.length > 0) {
+        preturiFromDb = {};
+        for (var i = 0; i < all.length; i++) {
+          preturiFromDb[all[i].denumire_norm] = parseFloat(all[i].pret);
+        }
+        console.log("[preturi-cc] Loaded " + all.length + " preturi din Supabase (paginat)");
+      }
+    } catch (e) {
+      console.warn("[preturi-cc] DB load failed, fallback to JSON:", e);
+    }
+    window.__PRETURI_CC__ = preturiFromDb || (ccResp && ccResp.ok ? await ccResp.json() : {});
   } catch (e) {
     console.error("Eroare incarcare date:", e);
     document.body.innerHTML = '<div style="padding:40px;text-align:center;font-family:sans-serif">Eroare la incarcarea datelor. Verifica consola browser-ului.</div>';

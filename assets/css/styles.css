@@ -32,7 +32,7 @@ body {
   pointer-events: none;
 }
 .masthead-inner {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 28px 32px;
   display: flex;
@@ -61,11 +61,11 @@ body {
 
 /* ─── LAYOUT ─── */
 .main {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 40px 32px 80px;
   display: grid;
-  grid-template-columns: 1fr 420px;
+  grid-template-columns: 1fr 480px;
   gap: 36px;
   align-items: start;
 }
@@ -658,11 +658,26 @@ body {
 }
 
 .cart-list {
-  flex: 1;
+  flex: 1 1 auto;
   overflow-y: auto;
   margin-right: -8px;
   padding-right: 8px;
+  /* Show many analize without scrolling — works for 15-20+ items */
+  min-height: 480px;
+  /* Visible scrollbar (gold themed) — much better than default */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(184,151,58,0.5) rgba(255,255,255,0.05);
 }
+.cart-list::-webkit-scrollbar { width: 8px; }
+.cart-list::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+}
+.cart-list::-webkit-scrollbar-thumb {
+  background: rgba(184,151,58,0.5);
+  border-radius: 4px;
+}
+.cart-list::-webkit-scrollbar-thumb:hover { background: rgba(184,151,58,0.7); }
 .cart-empty {
   padding: 40px 0;
   text-align: center;
@@ -678,19 +693,20 @@ body {
   font-family: 'DM Serif Display', serif;
 }
 .cart-item {
-  padding: 14px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(184,151,58,0.18);
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 10px;
 }
+.cart-item:first-child { padding-top: 6px; }
 .cart-item:last-child { border-bottom: none; }
 .cart-item-info { min-width: 0; }
 .cart-item-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  line-height: 1.3;
-  margin-bottom: 4px;
+  line-height: 1.25;
+  margin-bottom: 3px;
   overflow-wrap: break-word;
 }
 .cart-item-meta {
@@ -755,6 +771,8 @@ body {
   margin-top: 20px;
   padding-top: 20px;
   border-top: 1px solid rgba(255,255,255,0.1);
+  /* Don't shrink, but also don't grow excessively */
+  flex-shrink: 0;
 }
 .eprubete-summary {
   margin-bottom: 18px;
@@ -763,6 +781,28 @@ body {
   border: 1px solid rgba(184,151,58,0.25);
   border-radius: var(--radius);
 }
+.eprubete-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0 0 10px 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.eprubete-toggle .eprubete-label { margin-bottom: 0; }
+.eprubete-toggle-icon {
+  color: var(--gold);
+  font-size: 14px;
+  transition: transform 0.2s ease;
+}
+.eprubete-summary.collapsed .eprubete-toggle-icon { transform: rotate(-90deg); }
+.eprubete-summary.collapsed .eprubete-list { display: none; }
+.eprubete-summary.collapsed .eprubete-toggle { margin-bottom: 0; }
 .eprubete-label {
   font-size: 10px;
   font-weight: 600;
@@ -778,7 +818,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Smaller — eprubete should not dominate; user wants to see analize first */
+  max-height: 140px;
+  overflow-y: auto;
+  /* Subtle scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(184,151,58,0.4) transparent;
+  /* Tiny inner padding so scrollbar doesn't overlap text */
+  padding-right: 4px;
 }
+.eprubete-list::-webkit-scrollbar { width: 6px; }
+.eprubete-list::-webkit-scrollbar-thumb { background: rgba(184,151,58,0.4); border-radius: 3px; }
+.eprubete-list::-webkit-scrollbar-track { background: transparent; }
 .eprubete-item {
   display: flex;
   align-items: center;
@@ -819,6 +870,7 @@ body {
 }
 .eprubete-summary-report .eprubete-label { color: rgba(15,17,23,0.6); margin-bottom: 12px; }
 .eprubete-summary-report .eprubete-item { color: var(--ink); font-size: 14px; }
+.eprubete-summary-report .eprubete-list { max-height: none; overflow: visible; padding-right: 0; }
 .eprubete-summary-report .eprubete-text small { color: rgba(15,17,23,0.5); }
 
 .cart-totals {
@@ -827,6 +879,19 @@ body {
   align-items: baseline;
   margin-bottom: 16px;
 }
+
+/* Sticky action area: total + Proceseaza button always visible at bottom of cart pane */
+.cart-action-sticky {
+  position: sticky;
+  bottom: -28px;  /* compensate cart-pane-right padding-bottom of 28px so it sits flush */
+  margin-left: -28px;
+  margin-right: -28px;
+  padding: 16px 28px 28px 28px;
+  background: linear-gradient(180deg, rgba(15,17,23,0.85) 0%, var(--ink) 30%);
+  z-index: 5;
+  backdrop-filter: blur(6px);
+}
+.cart-action-sticky .cart-totals { margin-bottom: 14px; }
 .cart-totals-label {
   font-size: 11px;
   letter-spacing: 2px;
@@ -1287,7 +1352,7 @@ footer strong { color: var(--gold); }
   border-bottom: 2px solid var(--gold);
 }
 .topbar-inner {
-  max-width: 1400px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 14px 32px;
   display: flex;
@@ -1360,11 +1425,11 @@ footer strong { color: var(--gold); }
    CART LAYOUT (renamed from .main / .pane-left / etc.)
    ═══════════════════════════════════════════════════════════════ */
 .cart-main {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 40px 32px 80px;
   display: grid;
-  grid-template-columns: 1fr 420px;
+  grid-template-columns: 1fr 480px;
   gap: 36px;
   align-items: start;
 }
@@ -1379,10 +1444,19 @@ footer strong { color: var(--gold); }
   padding: 28px;
   position: sticky;
   top: 20px;
+  /* Use more vertical space for the cart pane */
   max-height: calc(100vh - 40px);
+  /* Removed min-height: it caused button to go out of viewport on tall content.
+     Now cart-pane scrolls internally if needed and "Proceseaza" stays sticky. */
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  /* Hide scrollbar visually but keep functionality */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(184,151,58,0.4) transparent;
 }
+.cart-pane-right::-webkit-scrollbar { width: 6px; }
+.cart-pane-right::-webkit-scrollbar-thumb { background: rgba(184,151,58,0.4); border-radius: 3px; }
 @media (max-width: 960px) {
   .cart-pane-right { position: static; max-height: none; }
 }
@@ -1439,7 +1513,7 @@ footer strong { color: var(--gold); }
   padding: 24px 32px;
 }
 .browse-search-inner {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   display: flex;
   gap: 12px;
@@ -1501,7 +1575,7 @@ footer strong { color: var(--gold); }
   padding: 0 32px 14px;
   border-bottom: 1px solid rgba(15,17,23,0.08);
 }
-.disc-inner { max-width: 1280px; margin: 0 auto; }
+.disc-inner { max-width: 1600px; margin: 0 auto; }
 .disc-toggle {
   padding: 8px 14px;
   background: transparent;
@@ -1567,7 +1641,7 @@ footer strong { color: var(--gold); }
 .disc-reset:hover { border-color: var(--accent); color: var(--accent); }
 
 .browse-main {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 24px 32px 60px;
 }
@@ -1908,7 +1982,7 @@ footer strong { color: var(--gold); }
    ISTORIC CERERI VIEW
    ═══════════════════════════════════════════════════════════════ */
 .istoric-main {
-  max-width: 1280px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 40px 32px 80px;
 }
@@ -2329,3 +2403,504 @@ footer strong { color: var(--gold); }
   flex: 1;
   min-width: 0;
 }
+
+/* ═══ Pret Clinica Central ═══ */
+/* In tabel comparator */
+.price-col-cc { white-space: nowrap; }
+.price-cell-cc {
+  text-align: right;
+  white-space: nowrap;
+}
+.price-cc {
+  font-weight: 700;
+  color: var(--gold);
+  font-size: 14px;
+}
+.price-cc-na {
+  color: rgba(15,17,23,0.25);
+  font-size: 13px;
+}
+/* In cart item */
+.cart-item-price-cc {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gold);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+/* ═══ Istoric row action buttons ═══ */
+.istoric-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.istoric-btn-xlsx,
+.istoric-btn-json {
+  background: rgba(15,17,23,0.06) !important;
+  color: var(--ink) !important;
+  border: 1px solid rgba(15,17,23,0.12) !important;
+}
+.istoric-btn-xlsx:hover,
+.istoric-btn-json:hover {
+  background: rgba(15,17,23,0.12) !important;
+}
+.istoric-btn-new {
+  background: rgba(184,151,58,0.15) !important;
+  color: var(--gold) !important;
+  border: 1px solid rgba(184,151,58,0.35) !important;
+}
+.istoric-btn-new:hover {
+  background: rgba(184,151,58,0.28) !important;
+}
+.istoric-btn-same {
+  background: var(--ink) !important;
+  color: var(--paper) !important;
+  border: 1px solid var(--ink) !important;
+}
+.istoric-btn-same:hover {
+  opacity: 0.85;
+}
+@media (max-width: 700px) {
+  .istoric-row-actions {
+    width: 100%;
+    margin-top: 8px;
+  }
+  .istoric-row-actions .istoric-row-btn {
+    flex: 1;
+    min-width: 80px;
+    text-align: center;
+  }
+}
+
+/* ═══ Pret CC in suggestion dropdown ═══ */
+.suggestion-prices {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.suggestion-price-cc {
+  font-family: 'DM Serif Display', serif;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--gold);
+  text-align: right;
+  line-height: 1;
+  min-width: 50px;
+  white-space: nowrap;
+}
+.suggestion-price-cc small {
+  display: block;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--gold);
+  margin-top: 4px;
+  opacity: 0.85;
+}
+
+/* ═══ Price source badge in report modal item ═══ */
+.lab-group-item-price-src {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--gold);
+  letter-spacing: 1px;
+  margin-top: 2px;
+  opacity: 0.7;
+}
+
+/* Istoric: PDF button - gold primary style */
+.istoric-btn-pdf {
+  background: var(--gold) !important;
+  color: var(--ink) !important;
+  border: 1px solid var(--gold) !important;
+  font-weight: 700;
+}
+.istoric-btn-pdf:hover {
+  opacity: 0.88;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PHONE PAIRING (Etapa 1)
+   ═══════════════════════════════════════════════════════════════ */
+
+.scan-btn-pair {
+  background: linear-gradient(135deg, #1e2a3a 0%, #2d3e5b 100%);
+  color: var(--cream);
+  border: 1px solid rgba(184, 151, 58, 0.3);
+}
+.scan-btn-pair:hover {
+  background: linear-gradient(135deg, #2d3e5b 0%, #1e2a3a 100%);
+  border-color: var(--gold);
+}
+
+.pair-box {
+  max-width: 500px;
+}
+.pair-sub {
+  font-size: 13px;
+  color: rgba(15, 17, 23, 0.6);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+.pair-loading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 32px;
+  justify-content: center;
+}
+.pair-qr-container {
+  background: #fff;
+  padding: 24px;
+  border-radius: 12px;
+  border: 2px solid var(--gold);
+  text-align: center;
+  margin-bottom: 16px;
+}
+.pair-qr-canvas {
+  display: inline-block;
+  background: #fff;
+  padding: 8px;
+}
+.pair-qr-canvas svg,
+.pair-qr-canvas canvas,
+.pair-qr-canvas img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.pair-session-id {
+  margin-top: 12px;
+  font-size: 12px;
+  color: rgba(15, 17, 23, 0.5);
+  font-family: 'DM Sans', sans-serif;
+  letter-spacing: 1px;
+}
+.pair-session-id strong {
+  color: var(--gold);
+  font-weight: 700;
+  font-size: 14px;
+}
+.pair-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(248, 246, 241, 0.5);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.pair-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f59e0b;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.pair-status-dot.connected {
+  background: #4ade80;
+  animation: none;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.pair-hint {
+  font-size: 11px;
+  color: rgba(15, 17, 23, 0.45);
+  line-height: 1.5;
+  padding: 10px 12px;
+  background: rgba(184, 151, 58, 0.05);
+  border-left: 2px solid var(--gold);
+  border-radius: 4px;
+}
+.pair-hint strong {
+  color: var(--gold);
+}
+
+/* Toast notification when phone scans something */
+.pair-toast {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  background: var(--ink);
+  color: var(--cream);
+  padding: 16px 20px;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  border-left: 4px solid var(--gold);
+  z-index: 10000;
+  font-size: 14px;
+  font-weight: 600;
+  max-width: 340px;
+  transform: translateX(400px);
+  transition: transform 0.3s ease-out;
+}
+.pair-toast.visible {
+  transform: translateX(0);
+}
+.pair-toast .toast-sub {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: rgba(248, 246, 241, 0.7);
+  margin-top: 4px;
+}
+
+/* Discount Paun badge */
+.discount-paun-badge {
+  display: inline-block;
+  background: var(--gold);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  letter-spacing: 1px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN PRETURI CC
+   ═══════════════════════════════════════════════════════════════ */
+
+.admin-only {
+  /* admin tab gets a subtle gold dot to differentiate */
+  position: relative;
+}
+.admin-only::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gold);
+}
+
+.admin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 20px 0 16px;
+  flex-wrap: wrap;
+}
+.admin-search {
+  flex: 1;
+  min-width: 260px;
+  padding: 12px 16px;
+  border: 1.5px solid rgba(15,17,23,0.15);
+  border-radius: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.admin-search:focus { border-color: var(--gold); }
+
+.admin-btn-add {
+  padding: 12px 20px;
+  background: var(--ink);
+  color: var(--paper);
+  border: none;
+  border-radius: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.admin-btn-add:hover { background: #2d3e5b; }
+
+.admin-btn-export {
+  padding: 12px 18px;
+  background: transparent;
+  color: var(--ink);
+  border: 1.5px solid rgba(15,17,23,0.2);
+  border-radius: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.admin-btn-export:hover {
+  background: var(--gold);
+  color: var(--ink);
+  border-color: var(--gold);
+}
+
+.admin-count {
+  font-size: 12px;
+  color: rgba(15,17,23,0.5);
+  letter-spacing: 0.5px;
+}
+
+.admin-table-wrap {
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid rgba(15,17,23,0.08);
+  overflow: hidden;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.admin-table thead {
+  background: var(--ink);
+  color: var(--paper);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.admin-table th {
+  text-align: left;
+  padding: 12px 16px;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+.admin-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(15,17,23,0.06);
+  vertical-align: middle;
+}
+.admin-table tbody tr:hover { background: rgba(184,151,58,0.05); }
+.admin-table tr.inactive { opacity: 0.4; }
+.admin-table .pret-val {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 700;
+  color: var(--ink);
+}
+.admin-table .row-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+.admin-table .row-edit-btn {
+  background: transparent;
+  border: 1px solid rgba(15,17,23,0.2);
+  color: var(--ink);
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.admin-table .row-edit-btn:hover {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+.admin-table .meta-small {
+  font-size: 11px;
+  color: rgba(15,17,23,0.5);
+}
+.admin-loading {
+  padding: 40px;
+  text-align: center;
+  color: rgba(15,17,23,0.4);
+}
+
+/* Edit modal */
+.admin-edit-box { max-width: 480px; }
+.admin-form { display: flex; flex-direction: column; }
+.admin-label {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.admin-input {
+  padding: 12px 14px;
+  border: 1.5px solid rgba(15,17,23,0.15);
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.admin-input:focus { border-color: var(--gold); }
+.admin-hint {
+  font-size: 11px;
+  color: rgba(15,17,23,0.5);
+  margin-top: 4px;
+}
+.admin-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.admin-checkbox input { width: 18px; height: 18px; cursor: pointer; }
+
+.admin-form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+  justify-content: flex-end;
+}
+.admin-btn-cancel,
+.admin-btn-delete,
+.admin-btn-save {
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+}
+.admin-btn-cancel {
+  background: transparent;
+  color: rgba(15,17,23,0.6);
+  border: 1px solid rgba(15,17,23,0.15);
+}
+.admin-btn-cancel:hover { background: rgba(15,17,23,0.04); }
+.admin-btn-delete {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  margin-right: auto;
+}
+.admin-btn-delete:hover { background: var(--accent); color: #fff; }
+.admin-btn-save {
+  background: var(--gold);
+  color: var(--ink);
+}
+.admin-btn-save:hover { background: #d4ad48; }
+.admin-btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.admin-error {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(220,38,38,0.08);
+  border: 1px solid rgba(220,38,38,0.25);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--accent);
+  display: none;
+}
+.admin-error.visible { display: block; }
