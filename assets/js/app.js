@@ -2869,20 +2869,34 @@ function exportIstoricXlsx(id) {
 function exportIstoricPdf(id) {
   var c = istoricState.cereri.find(function(x){ return x.id === id; });
   if (!c) return;
-  var saved = {
+
+  // Snapshot current cartState so we can restore after the user closes the picker.
+  // PDF helpers read patient info from cartState directly.
+  window.__istoricCartSnapshot = {
     prenume: cartState.prenume, nume: cartState.nume, cnp: cartState.cnp,
-    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar
+    email: cartState.email, telefonPrefix: cartState.telefonPrefix, telefonNumar: cartState.telefonNumar,
+    numeMedic: cartState.numeMedic, sex: cartState.sex, dataNasterii: cartState.dataNasterii
   };
+  // Inject istoric patient data into cartState
   cartState.prenume = c.pacient_prenume || "";
   cartState.nume = c.pacient_nume || "";
   cartState.cnp = c.cnp_pacient || "";
   cartState.email = c.pacient_email || "";
   cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
   cartState.telefonNumar = c.pacient_telefon_numar || "";
+  // numeMedic isn't saved in cc_cereri; sex + dataNasterii get derived from CNP automatically
+  cartState.numeMedic = "";
+  cartState.sex = "";
+  cartState.dataNasterii = "";
+
   var r = rebuildReportFromCerere(c);
-  exportReportPdf(r);
-  cartState.prenume = saved.prenume; cartState.nume = saved.nume; cartState.cnp = saved.cnp;
-  cartState.email = saved.email; cartState.telefonPrefix = saved.telefonPrefix; cartState.telefonNumar = saved.telefonNumar;
+
+  // For istoric, numar_ordine is already known — short-circuit the saveCerere promise.
+  window.__currentCerereSavePromise = Promise.resolve({ numar_ordine: c.numar_ordine || null });
+
+  // Open doc picker — user chooses Recoltare / Servicii / GDPR.
+  // closeDocPickerModal will detect the snapshot and restore cartState.
+  openDocPickerModal(r);
 }
 
 // ─── Export JSON from istoric ───
@@ -4234,6 +4248,22 @@ function openDocPickerModal(r) {
 function closeDocPickerModal() {
   var m = document.getElementById("docPickerModal");
   if (m) m.remove();
+
+  // If we were opened from istoric view, restore the original cartState
+  // so the active cerere being built isn't polluted.
+  if (window.__istoricCartSnapshot) {
+    var snap = window.__istoricCartSnapshot;
+    cartState.prenume = snap.prenume;
+    cartState.nume = snap.nume;
+    cartState.cnp = snap.cnp;
+    cartState.email = snap.email;
+    cartState.telefonPrefix = snap.telefonPrefix;
+    cartState.telefonNumar = snap.telefonNumar;
+    cartState.numeMedic = snap.numeMedic;
+    cartState.sex = snap.sex;
+    cartState.dataNasterii = snap.dataNasterii;
+    window.__istoricCartSnapshot = null;
+  }
 }
 
 async function pickDoc(r, type, dataRecoltareISO) {
