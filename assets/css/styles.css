@@ -2988,3 +2988,276 @@ footer strong { color: var(--gold); }
   color: rgba(15, 17, 23, 0.45);
   margin-top: 6px;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   PROGRAMARI TAB
+   ═══════════════════════════════════════════════════════════════ */
+
+.programari-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(15,17,23,0.08);
+}
+.prog-filter-btn {
+  padding: 8px 14px;
+  background: var(--cream);
+  border: 1.5px solid rgba(15,17,23,0.12);
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: rgba(15,17,23,0.65);
+}
+.prog-filter-btn:hover {
+  background: rgba(184,151,58,0.08);
+  border-color: rgba(184,151,58,0.4);
+}
+.prog-filter-btn.active {
+  background: var(--ink);
+  color: var(--gold);
+  border-color: var(--ink);
+}
+
+.programari-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.programare-card {
+  background: #fff;
+  border: 1.5px solid rgba(15,17,23,0.08);
+  border-radius: 12px;
+  padding: 18px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 18px;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.programare-card:hover {
+  border-color: var(--gold);
+  box-shadow: 0 2px 8px rgba(184,151,58,0.1);
+}
+.programare-card.has-bilet {
+  border-left: 4px solid var(--gold);
+}
+.programare-card.ocr-processed {
+  border-left: 4px solid var(--success, #16a34a);
+}
+.programare-card.cancelled {
+  opacity: 0.5;
+  border-left: 4px solid #dc2626;
+}
+
+.prog-date-box {
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 10px;
+  padding: 10px 14px;
+  text-align: center;
+  min-width: 78px;
+}
+.prog-date-day {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--gold);
+}
+.prog-date-month {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+.prog-date-time {
+  font-size: 11px;
+  margin-top: 6px;
+  color: rgba(248,246,241,0.7);
+  font-weight: 600;
+}
+
+.prog-info { min-width: 0; }
+.prog-info-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 3px;
+}
+.prog-info-email {
+  font-size: 12px;
+  color: rgba(15,17,23,0.55);
+  margin-bottom: 6px;
+}
+.prog-info-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: rgba(15,17,23,0.55);
+}
+.prog-info-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.prog-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.prog-status-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.prog-status-scheduled { background: rgba(15,17,23,0.08); color: var(--ink); }
+.prog-status-bilet { background: rgba(184,151,58,0.18); color: #6f5519; }
+.prog-status-ocr { background: rgba(22,163,74,0.15); color: #166534; }
+.prog-status-completed { background: rgba(22,163,74,0.25); color: #166534; }
+.prog-status-cancelled { background: rgba(220,38,38,0.12); color: #991b1b; }
+
+@media (max-width: 700px) {
+  .programare-card { grid-template-columns: 1fr; gap: 12px; }
+  .prog-status { align-items: flex-start; flex-direction: row; }
+}
+
+/* Modal pentru programare detalii */
+.programare-modal-box { max-width: 720px; }
+.prog-detail-section {
+  margin-bottom: 18px;
+}
+.prog-detail-section h3 {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--gold);
+  margin: 0 0 10px;
+}
+.prog-detail-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(15,17,23,0.05);
+  font-size: 14px;
+}
+.prog-detail-row:last-child { border-bottom: none; }
+.prog-detail-label {
+  color: rgba(15,17,23,0.55);
+  font-size: 12px;
+}
+.prog-detail-val { font-weight: 600; color: var(--ink); }
+
+.bilet-preview {
+  background: var(--cream);
+  border: 1.5px solid rgba(15,17,23,0.12);
+  border-radius: 10px;
+  padding: 14px;
+  text-align: center;
+}
+.bilet-preview img {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 6px;
+  display: block;
+  margin: 0 auto 12px;
+}
+.bilet-preview-link {
+  display: inline-block;
+  padding: 8px 14px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 8px;
+}
+.bilet-no-file {
+  padding: 24px;
+  text-align: center;
+  color: rgba(15,17,23,0.4);
+  background: var(--cream);
+  border: 1.5px dashed rgba(15,17,23,0.15);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.prog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(15,17,23,0.08);
+}
+.prog-btn-primary {
+  flex: 1;
+  min-width: 180px;
+  padding: 12px 18px;
+  background: var(--gold);
+  color: var(--ink);
+  border: none;
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.prog-btn-primary:hover { background: #d4ad48; }
+.prog-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.prog-btn-secondary {
+  padding: 12px 18px;
+  background: transparent;
+  color: var(--ink);
+  border: 1.5px solid rgba(15,17,23,0.2);
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.prog-btn-secondary:hover { background: rgba(15,17,23,0.04); }
+.prog-btn-danger {
+  padding: 12px 18px;
+  background: transparent;
+  color: #dc2626;
+  border: 1.5px solid rgba(220,38,38,0.4);
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.prog-btn-danger:hover { background: rgba(220,38,38,0.06); }
+
+/* Istoric: pending status badge */
+.istoric-status-pending {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  background: rgba(245,158,11,0.18);
+  color: #92400e;
+  border-radius: 4px;
+}
