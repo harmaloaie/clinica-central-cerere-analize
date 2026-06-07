@@ -5253,27 +5253,27 @@ async function processProgramareOcr(p) {
     for (var i = 0; i < analizeArr.length; i++) {
       var rawText = analizeArr[i];
       var match = (typeof findBestMatch === "function") ? findBestMatch(rawText) : null;
-      if (!match) {
+      // findBestMatch returns { entry: {key, displayName, offers}, score } or null
+      if (!match || !match.entry) {
         console.warn("[programari OCR] Negăsit:", rawText);
         notMatched.push(rawText);
         continue;
       }
-      // Get offers from ANALIZE_INDEX (same approach as scan flow / aceeasiCerereDinIstoric)
-      var key = (typeof normName === "function") ? normName(match.Denumire) : match.Denumire.toLowerCase();
-      var entry = (typeof ANALIZE_INDEX !== "undefined") ? ANALIZE_INDEX[key] : null;
-      if (!entry || !entry.offers || !entry.offers.length) {
-        console.warn("[programari OCR] Nu am oferte pentru:", match.Denumire);
+      var entry = match.entry;
+      if (!entry.offers || !entry.offers.length) {
+        console.warn("[programari OCR] Entry fără oferte:", entry.displayName);
         notMatched.push(rawText);
         continue;
       }
       var best = (typeof cheapestOffer === "function") ? cheapestOffer(entry) : { offer: entry.offers[0], finalPrice: entry.offers[0].Pret };
       if (!best.offer) {
-        console.warn("[programari OCR] Nu am cheapest offer pentru:", match.Denumire);
+        console.warn("[programari OCR] Nu am cheapest offer pentru:", entry.displayName);
         notMatched.push(rawText);
         continue;
       }
+      console.log("[programari OCR] Match:", rawText, "→", entry.displayName, "(score:", match.score.toFixed(2) + ")");
       matched.push({
-        displayName: match.Denumire,
+        displayName: entry.displayName,
         cnpKey: rawText,
         offer: best.offer,
         finalPriceComputed: best.finalPrice
