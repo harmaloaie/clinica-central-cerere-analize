@@ -5241,36 +5241,62 @@ async function processProgramareOcr(p) {
     var data = ocrRes.data;
     if (!data || data.error) throw new Error("OCR returned error: " + (data && data.error ? data.error : "unknown"));
 
+    console.log("[programari OCR] Gemini response:", data);
+
     // 4. Match analize to catalog (reuse existing fuzzy-matching logic)
     if (ocrBtn) ocrBtn.textContent = "Se asociaza analizele...";
     var matched = [];
+    var notMatched = [];
     var analizeArr = Array.isArray(data.analize) ? data.analize : [];
+    console.log("[programari OCR] Analize extrase:", analizeArr.length, analizeArr);
+
     for (var i = 0; i < analizeArr.length; i++) {
       var rawText = analizeArr[i];
       var match = (typeof findBestMatch === "function") ? findBestMatch(rawText) : null;
-      if (match) {
-        // Build offer like in scan flow
-        var offers = (typeof getOffersForAnaliza === "function") ? getOffersForAnaliza(match.Denumire) : [];
-        var bestOffer = null;
-        if (offers.length) {
-          // Pick cheapest finalPrice
-          var bestPrice = Infinity;
-          for (var k = 0; k < offers.length; k++) {
-            var ep = (typeof effectivePrice === "function") ? effectivePrice(match.Denumire, offers[k]) : { finalPrice: offers[k].Pret };
-            if (ep.finalPrice != null && ep.finalPrice < bestPrice) {
-              bestPrice = ep.finalPrice;
-              bestOffer = offers[k];
-            }
-          }
-        }
-        if (bestOffer) {
-          matched.push({
-            displayName: match.Denumire,
-            cnpKey: rawText,
-            offer: bestOffer
-          });
-        }
+      if (!match) {
+        console.warn("[programari OCR] Negăsit:", rawText);
+        notMatched.push(rawText);
+        continue;
       }
+      // Get offers from ANALIZE_INDEX (same approach as scan flow / aceeasiCerereDinIstoric)
+      var key = (typeof normName === "function") ? normName(match.Denumire) : match.Denumire.toLowerCase();
+      var entry = (typeof ANALIZE_INDEX !== "undefined") ? ANALIZE_INDEX[key] : null;
+      if (!entry || !entry.offers || !entry.offers.length) {
+        console.warn("[programari OCR] Nu am oferte pentru:", match.Denumire);
+        notMatched.push(rawText);
+        continue;
+      }
+      var best = (typeof cheapestOffer === "function") ? cheapestOffer(entry) : { offer: entry.offers[0], finalPrice: entry.offers[0].Pret };
+      if (!best.offer) {
+        console.warn("[programari OCR] Nu am cheapest offer pentru:", match.Denumire);
+        notMatched.push(rawText);
+        continue;
+      }
+      matched.push({
+        displayName: match.Denumire,
+        cnpKey: rawText,
+        offer: best.offer,
+        finalPriceComputed: best.finalPrice
+      });
+    }
+
+    console.log("[programari OCR] Matched:", matched.length, "of", analizeArr.length);
+    if (matched.length === 0) {
+      // Show user what was extracted vs what we couldn't match
+      var msg = "OCR a procesat biletul dar nu am putut asocia nicio analiza cu catalogul.\n\n";
+      if (analizeArr.length === 0) {
+        msg += "Gemini nu a extras nicio analiza din imagine. Verifica daca imaginea e clara si contine un bilet cu lista de analize.";
+      } else {
+        msg += "Analize extrase din bilet: " + analizeArr.length + "\n";
+        msg += "Nu am putut asocia: " + notMatched.join(", ");
+      }
+      alert(msg);
+      if (ocrBtn) {
+        ocrBtn.disabled = false;
+        ocrBtn.textContent = "✨ Proceseaza OCR si creeaza cerere";
+      }
+      programariState.ocrInProgress = false;
+      return;
     }
 
     // 5. Build patient + items payload, save cerere with status='pending'
@@ -5280,14 +5306,14 @@ async function processProgramareOcr(p) {
 
     // Use same column names as saveCerere() — schema: total_lista_ron / total_final_ron / etc.
     var itemsForDb = matched.map(function(m) {
-      var ep = (typeof effectivePrice === "function") ? effectivePrice(m.displayName, m.offer) : { finalPrice: m.offer.Pret, discountPct: 0 };
       var detalii = (typeof getDetails === "function") ? getDetails(m.offer.Laborator, m.displayName) : null;
+      var finalP = (m.finalPriceComputed != null) ? m.finalPriceComputed : m.offer.Pret;
       return {
         denumire: m.displayName,
         laborator: m.offer.Laborator,
         pret_lista: m.offer.Pret,
-        pret_final: Math.round((ep.finalPrice || m.offer.Pret) * 100) / 100,
-        discount: ep.discountPct || 0,
+        pret_final: Math.round(finalP * 100) / 100,
+        discount: m.offer.Pret > 0 ? Math.round((1 - finalP / m.offer.Pret) * 100) : 0,
         timp: (m.offer.Timp && m.offer.Timp !== "N/A") ? m.offer.Timp : null,
         categorie: (m.offer.Categorie && m.offer.Categorie !== "N/A") ? m.offer.Categorie : null,
         detalii: detalii ? {
@@ -5424,7 +5450,12 @@ async function openCerereFromProgramare(cerereId) {
       emailInput.value = cartState.email;
       telefonNumarInput.value = cartState.telefonNumar;
       if (telefonPrefixSelect) telefonPrefixSelect.value = cartState.telefonPrefix;
-      revalidatePacientFields();
+      // Trigger validation/UI refresh (functions defined elsewhere in app.js)
+      if (typeof updateNumeField === "function") {
+        updateNumeField(prenumeInput, "prenume");
+        updateNumeField(numeInput, "nume");
+      }
+      if (typeof updateCnpUi === "function") updateCnpUi();
 
       // Clear cart, then add items from cerere
       cartState.cart = [];
