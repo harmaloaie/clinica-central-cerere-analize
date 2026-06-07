@@ -255,6 +255,8 @@ function switchView(name) {
   document.getElementById("viewIstoric").style.display = (name === "istoric") ? "block" : "none";
   var bordEl = document.getElementById("viewBorderouri");
   if (bordEl) bordEl.style.display = (name === "borderouri") ? "block" : "none";
+  var progEl = document.getElementById("viewProgramari");
+  if (progEl) progEl.style.display = (name === "programari") ? "block" : "none";
   var adminEl = document.getElementById("viewAdmin");
   if (adminEl) adminEl.style.display = (name === "admin") ? "block" : "none";
   var tabs = document.querySelectorAll(".topbar-tab");
@@ -278,6 +280,8 @@ function switchView(name) {
     if (typeof loadIstoric === "function") loadIstoric();
   } else if (name === "borderouri") {
     if (typeof loadBorderouri === "function") loadBorderouri();
+  } else if (name === "programari") {
+    if (typeof loadProgramari === "function") loadProgramari();
   } else if (name === "admin") {
     if (typeof loadAdminPreturi === "function") loadAdminPreturi();
   }
@@ -2628,7 +2632,31 @@ async function saveCerere(r) {
   };
 
   try {
-    var result = await window.sb.from("cc_cereri").insert([payload]).select().single();
+    var result;
+    // If we loaded a pending cerere (from a programare), UPDATE it instead of inserting new
+    if (window.__loadedPendingCerereId) {
+      payload.status = "processed";  // Mark as processed when user clicks Proceseaza
+      result = await window.sb.from("cc_cereri")
+        .update(payload)
+        .eq("id", window.__loadedPendingCerereId)
+        .select().single();
+
+      // Also update the linked programare to 'completed'
+      if (!result.error && window.__loadedPendingProgId) {
+        try {
+          await window.sb.from("cc_programari")
+            .update({ status: "completed" })
+            .eq("id", window.__loadedPendingProgId);
+        } catch (e) { console.warn("[saveCerere] Failed to update programare status:", e); }
+      }
+
+      // Clear pending flags
+      window.__loadedPendingCerereId = null;
+      window.__loadedPendingProgId = null;
+    } else {
+      // Normal flow: insert new cerere with default status='processed'
+      result = await window.sb.from("cc_cereri").insert([payload]).select().single();
+    }
     if (result.error) {
       console.error("[saveCerere] Eroare salvare:", result.error);
       showSaveStatus(false, result.error.message);
@@ -2763,12 +2791,14 @@ function renderIstoric() {
     var dateStr = date.toLocaleString("ro-RO", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
     // Build patient name from columns (or fallback to CNP only if old data)
     var fullName = [c.pacient_prenume, c.pacient_nume].filter(Boolean).join(" ").trim();
+    var isPending = c.status === "pending";
+    var pendingBadge = isPending ? ' <span class="istoric-status-pending">PENDING</span>' : '';
     html += '<div class="istoric-row" data-id="' + esc(c.id) + '">';
     html += '<div class="istoric-row-main">';
     if (fullName) {
-      html += '<div class="istoric-row-cnp">' + esc(fullName) + ' <small style="font-family:monospace;font-weight:400;color:rgba(15,17,23,0.5)">(' + esc(c.cnp_pacient) + ')</small></div>';
+      html += '<div class="istoric-row-cnp">' + esc(fullName) + ' <small style="font-family:monospace;font-weight:400;color:rgba(15,17,23,0.5)">(' + esc(c.cnp_pacient) + ')</small>' + pendingBadge + '</div>';
     } else {
-      html += '<div class="istoric-row-cnp">' + esc(c.cnp_pacient) + '</div>';
+      html += '<div class="istoric-row-cnp">' + esc(c.cnp_pacient) + pendingBadge + '</div>';
     }
     html += '<div class="istoric-row-meta">';
     html += '<span>' + esc(dateStr) + '</span>';
@@ -2779,6 +2809,9 @@ function renderIstoric() {
     html += '</div></div>';
     html += '<div class="istoric-row-price"><strong>' + Math.round(c.total_final_ron) + '</strong> RON</div>';
     html += '<div class="istoric-row-actions">';
+    if (isPending) {
+      html += '<button class="istoric-row-btn istoric-btn-pdf" data-act="open-pending" data-id="' + esc(c.id) + '">Deschide in cos</button>';
+    }
     html += '<button class="istoric-row-btn" data-act="detalii" data-id="' + esc(c.id) + '">Detalii</button>';
     html += '<button class="istoric-row-btn istoric-btn-pdf" data-act="pdf" data-id="' + esc(c.id) + '">PDF</button>';
     html += '<button class="istoric-row-btn istoric-btn-xlsx" data-act="xlsx" data-id="' + esc(c.id) + '">Excel</button>';
@@ -2802,6 +2835,7 @@ function renderIstoric() {
         else if (act === "json") exportIstoricJson(id);
         else if (act === "noua") cerereNouaDinIstoric(id);
         else if (act === "same") aceeasiCerereDinIstoric(id);
+        else if (act === "open-pending") openPendingCerereInCart(parseInt(id, 10));
       });
     })(btns[i]);
   }
@@ -4901,4 +4935,803 @@ function exportGdprConsent(r) {
   var fullN = (cartState.prenume.trim() + "_" + cartState.nume.trim())
     .replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "");
   doc.save("Consimtamant_GDPR_" + fullN + ".pdf");
+}
+
+// ════════════════════════════════════════════════════════════════
+// PROGRAMARI MODULE
+// ════════════════════════════════════════════════════════════════
+
+var programariState = {
+  loaded: false,
+  list: [],
+  filter: "all",          // all / scheduled / bilet_uploaded / ocr_processed / completed / upcoming
+  selectedId: null,
+  ocrInProgress: false
+};
+
+function progEsc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function progFormatDate(iso) {
+  if (!iso) return "—";
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("ro-RO", { day: "2-digit", month: "long", year: "numeric" });
+}
+
+function progFormatTime(iso) {
+  if (!iso) return "";
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" });
+}
+
+function progDayBoxParts(iso) {
+  if (!iso) return { day: "—", month: "", time: "" };
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return { day: "—", month: "", time: "" };
+  return {
+    day: String(d.getDate()).padStart(2, "0"),
+    month: d.toLocaleDateString("ro-RO", { month: "short" }).toUpperCase().replace(".", ""),
+    time: d.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" })
+  };
+}
+
+function progStatusInfo(status) {
+  switch (status) {
+    case "scheduled": return { label: "Programat", cls: "prog-status-scheduled" };
+    case "bilet_uploaded": return { label: "Bilet urcat", cls: "prog-status-bilet" };
+    case "ocr_processed": return { label: "OCR procesat", cls: "prog-status-ocr" };
+    case "completed": return { label: "Completat", cls: "prog-status-completed" };
+    case "cancelled": return { label: "Anulat", cls: "prog-status-cancelled" };
+    default: return { label: status || "—", cls: "prog-status-scheduled" };
+  }
+}
+
+// Load programari from DB
+async function loadProgramari() {
+  var listEl = document.getElementById("programariList");
+  if (!listEl) return;
+  listEl.innerHTML = '<div class="istoric-loading">Se incarca programarile...</div>';
+  try {
+    var res = await window.sb.from("cc_programari")
+      .select("id, pacient_id, email_pacient, nume_pacient, telefon_pacient, data_programare, tip_serviciu, nume_doctor, note, bilet_url, bilet_filename, bilet_mime_type, bilet_uploaded_at, status, cerere_id, created_at, updated_at")
+      .order("data_programare", { ascending: false });
+    if (res.error) {
+      listEl.innerHTML = '<div class="istoric-loading">Eroare: ' + progEsc(res.error.message) + '</div>';
+      return;
+    }
+    programariState.list = res.data || [];
+    programariState.loaded = true;
+    renderProgramari();
+  } catch (e) {
+    listEl.innerHTML = '<div class="istoric-loading">Eroare: ' + progEsc(String(e.message || e)) + '</div>';
+  }
+}
+
+function renderProgramari() {
+  var listEl = document.getElementById("programariList");
+  if (!listEl) return;
+  var filter = programariState.filter || "all";
+  var now = new Date();
+  var items = programariState.list.filter(function(p) {
+    if (filter === "all") return true;
+    if (filter === "upcoming") {
+      return new Date(p.data_programare) >= now && p.status !== "cancelled";
+    }
+    return p.status === filter;
+  });
+
+  if (!items.length) {
+    listEl.innerHTML = '<div class="istoric-loading">Nicio programare pentru filtrul selectat.</div>';
+    return;
+  }
+
+  var html = "";
+  for (var i = 0; i < items.length; i++) {
+    var p = items[i];
+    var box = progDayBoxParts(p.data_programare);
+    var info = progStatusInfo(p.status);
+    var name = p.nume_pacient || p.email_pacient || "Pacient necunoscut";
+    var cardClasses = ["programare-card"];
+    if (p.bilet_url) cardClasses.push("has-bilet");
+    if (p.status === "ocr_processed") cardClasses.push("ocr-processed");
+    if (p.status === "cancelled") cardClasses.push("cancelled");
+
+    var metaParts = [];
+    if (p.tip_serviciu) metaParts.push('<span>&#128203; ' + progEsc(p.tip_serviciu) + '</span>');
+    if (p.bilet_url) metaParts.push('<span>&#128206; Bilet urcat</span>');
+    if (p.cerere_id) metaParts.push('<span>&#128221; Cerere #' + p.cerere_id + '</span>');
+    if (p.telefon_pacient) metaParts.push('<span>&#128241; ' + progEsc(p.telefon_pacient) + '</span>');
+
+    html += '<div class="' + cardClasses.join(" ") + '" data-prog-id="' + p.id + '">';
+    html += '<div class="prog-date-box">';
+    html += '<div class="prog-date-day">' + box.day + '</div>';
+    html += '<div class="prog-date-month">' + progEsc(box.month) + '</div>';
+    html += '<div class="prog-date-time">' + box.time + '</div>';
+    html += '</div>';
+    html += '<div class="prog-info">';
+    html += '<div class="prog-info-name">' + progEsc(name) + '</div>';
+    html += '<div class="prog-info-email">' + progEsc(p.email_pacient) + '</div>';
+    if (metaParts.length) html += '<div class="prog-info-meta">' + metaParts.join("") + '</div>';
+    html += '</div>';
+    html += '<div class="prog-status">';
+    html += '<span class="prog-status-badge ' + info.cls + '">' + info.label + '</span>';
+    html += '</div>';
+    html += '</div>';
+  }
+  listEl.innerHTML = html;
+
+  // Wire up click on cards
+  var cards = listEl.querySelectorAll(".programare-card");
+  for (var k = 0; k < cards.length; k++) {
+    cards[k].addEventListener("click", function() {
+      var id = parseInt(this.getAttribute("data-prog-id"), 10);
+      openProgramareModal(id);
+    });
+  }
+}
+
+// Open detail modal for a programare
+async function openProgramareModal(id) {
+  var p = programariState.list.find(function(x) { return x.id === id; });
+  if (!p) return;
+  programariState.selectedId = id;
+
+  var modal = document.getElementById("programareModal");
+  var title = document.getElementById("programareModalTitle");
+  var tag = document.getElementById("programareModalTag");
+  var body = document.getElementById("programareModalBody");
+
+  var info = progStatusInfo(p.status);
+  tag.textContent = info.label;
+  title.textContent = p.nume_pacient || p.email_pacient || "Pacient necunoscut";
+
+  var html = "";
+
+  // Section: Detalii pacient
+  html += '<div class="prog-detail-section">';
+  html += '<h3>Pacient</h3>';
+  html += '<div class="prog-detail-row"><span class="prog-detail-label">Nume</span><span class="prog-detail-val">' + progEsc(p.nume_pacient || "—") + '</span></div>';
+  html += '<div class="prog-detail-row"><span class="prog-detail-label">Email</span><span class="prog-detail-val">' + progEsc(p.email_pacient) + '</span></div>';
+  if (p.telefon_pacient) html += '<div class="prog-detail-row"><span class="prog-detail-label">Telefon</span><span class="prog-detail-val">' + progEsc(p.telefon_pacient) + '</span></div>';
+  html += '</div>';
+
+  // Section: Detalii programare
+  html += '<div class="prog-detail-section">';
+  html += '<h3>Programare</h3>';
+  html += '<div class="prog-detail-row"><span class="prog-detail-label">Data</span><span class="prog-detail-val">' + progFormatDate(p.data_programare) + ' ' + progFormatTime(p.data_programare) + '</span></div>';
+  if (p.tip_serviciu) html += '<div class="prog-detail-row"><span class="prog-detail-label">Tip serviciu</span><span class="prog-detail-val">' + progEsc(p.tip_serviciu) + '</span></div>';
+  if (p.nume_doctor) html += '<div class="prog-detail-row"><span class="prog-detail-label">Doctor</span><span class="prog-detail-val">' + progEsc(p.nume_doctor) + '</span></div>';
+  if (p.note) html += '<div class="prog-detail-row"><span class="prog-detail-label">Note</span><span class="prog-detail-val">' + progEsc(p.note) + '</span></div>';
+  html += '</div>';
+
+  // Section: Bilet de trimitere (preview)
+  html += '<div class="prog-detail-section">';
+  html += '<h3>Bilet de trimitere</h3>';
+  if (p.bilet_url) {
+    // Get signed URL for the bilet
+    html += '<div class="bilet-preview" id="biletPreviewContainer">';
+    html += '<div class="istoric-loading">Se incarca biletul...</div>';
+    html += '</div>';
+  } else {
+    html += '<div class="bilet-no-file">Pacientul nu a urcat inca biletul de trimitere.</div>';
+  }
+  html += '</div>';
+
+  // Section: Cerere asociata
+  if (p.cerere_id) {
+    html += '<div class="prog-detail-section">';
+    html += '<h3>Cerere asociata</h3>';
+    html += '<div class="prog-detail-row"><span class="prog-detail-label">Numar cerere</span><span class="prog-detail-val">#' + p.cerere_id + '</span></div>';
+    html += '</div>';
+  }
+
+  // Actions
+  html += '<div class="prog-actions">';
+  if (p.bilet_url && !p.cerere_id && p.status !== "cancelled") {
+    html += '<button type="button" class="prog-btn-primary" id="btnProgOcr">&#10024; Proceseaza OCR si creeaza cerere</button>';
+  } else if (p.cerere_id) {
+    html += '<button type="button" class="prog-btn-primary" id="btnProgOpenCerere">&#128203; Deschide cererea in cos</button>';
+  }
+  html += '<button type="button" class="prog-btn-secondary" id="btnProgEdit">Editeaza programare</button>';
+  if (p.status !== "cancelled") {
+    html += '<button type="button" class="prog-btn-danger" id="btnProgCancel">Anuleaza programare</button>';
+  }
+  html += '</div>';
+
+  body.innerHTML = html;
+  modal.classList.add("visible");
+
+  // Load bilet preview asynchronously
+  if (p.bilet_url) {
+    loadBiletPreview(p);
+  }
+
+  // Wire up action buttons
+  var ocrBtn = document.getElementById("btnProgOcr");
+  if (ocrBtn) ocrBtn.addEventListener("click", function() { processProgramareOcr(p); });
+
+  var openCerereBtn = document.getElementById("btnProgOpenCerere");
+  if (openCerereBtn) openCerereBtn.addEventListener("click", function() { openCerereFromProgramare(p.cerere_id); });
+
+  var editBtn = document.getElementById("btnProgEdit");
+  if (editBtn) editBtn.addEventListener("click", function() { editProgramare(p); });
+
+  var cancelBtn = document.getElementById("btnProgCancel");
+  if (cancelBtn) cancelBtn.addEventListener("click", function() { cancelProgramare(p); });
+}
+
+function closeProgramareModal() {
+  var m = document.getElementById("programareModal");
+  if (m) m.classList.remove("visible");
+  programariState.selectedId = null;
+}
+
+// Load bilet preview from Supabase Storage using signed URL
+async function loadBiletPreview(p) {
+  var container = document.getElementById("biletPreviewContainer");
+  if (!container) return;
+  try {
+    // Create signed URL (60 seconds) for the bilet
+    var signedRes = await window.sb.storage
+      .from("bilete-programari")
+      .createSignedUrl(p.bilet_url, 60);
+    if (signedRes.error || !signedRes.data) {
+      container.innerHTML = '<div class="bilet-no-file">Eroare la incarcare bilet: ' + progEsc(signedRes.error ? signedRes.error.message : "necunoscuta") + '</div>';
+      return;
+    }
+    var url = signedRes.data.signedUrl;
+    var mime = p.bilet_mime_type || "";
+    var html = "";
+    if (mime.indexOf("image/") === 0) {
+      html += '<img src="' + progEsc(url) + '" alt="Bilet de trimitere">';
+    } else if (mime === "application/pdf") {
+      html += '<div style="font-size:32px;margin-bottom:8px">&#128196;</div>';
+      html += '<div style="font-size:13px;color:rgba(15,17,23,0.6);margin-bottom:8px">' + progEsc(p.bilet_filename || "Bilet PDF") + '</div>';
+    }
+    html += '<a class="bilet-preview-link" href="' + progEsc(url) + '" target="_blank" rel="noopener">Deschide intr-un tab nou &#8599;</a>';
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="bilet-no-file">Eroare: ' + progEsc(String(e.message || e)) + '</div>';
+  }
+}
+
+// Process OCR on bilet, create pending cerere
+async function processProgramareOcr(p) {
+  if (programariState.ocrInProgress) return;
+  if (!p.bilet_url) { alert("Nu exista bilet urcat."); return; }
+
+  programariState.ocrInProgress = true;
+  var ocrBtn = document.getElementById("btnProgOcr");
+  if (ocrBtn) {
+    ocrBtn.disabled = true;
+    ocrBtn.textContent = "Se descarca biletul...";
+  }
+
+  try {
+    // 1. Download bilet from Storage
+    var dlRes = await window.sb.storage.from("bilete-programari").download(p.bilet_url);
+    if (dlRes.error) throw new Error("Eroare descarcare: " + dlRes.error.message);
+    var blob = dlRes.data;
+
+    // 2. Convert to base64
+    if (ocrBtn) ocrBtn.textContent = "Se proceseaza imaginea...";
+    var base64 = await blobToBase64(blob);
+    var mime = p.bilet_mime_type || blob.type || "image/jpeg";
+
+    // For PDFs, OCR doesn't work — we'd need to convert PDF→image first.
+    // For now, alert if PDF.
+    if (mime === "application/pdf") {
+      alert("OCR pe PDF nu e suportat momentan. Te rugam sa converti biletul intr-o imagine (JPG/PNG) si sa-l re-urci.");
+      if (ocrBtn) { ocrBtn.disabled = false; ocrBtn.textContent = "✨ Proceseaza OCR si creeaza cerere"; }
+      programariState.ocrInProgress = false;
+      return;
+    }
+
+    // 3. Call Edge Function ocr-bilet
+    if (ocrBtn) ocrBtn.textContent = "Se ruleaza OCR...";
+    var ocrRes = await window.sb.functions.invoke("ocr-bilet", {
+      body: { imageBase64: base64, mediaType: mime }
+    });
+    if (ocrRes.error) throw new Error("OCR error: " + (ocrRes.error.message || ocrRes.error));
+    var data = ocrRes.data;
+    if (!data || data.error) throw new Error("OCR returned error: " + (data && data.error ? data.error : "unknown"));
+
+    console.log("[programari OCR] Gemini response:", data);
+
+    // 4. Match analize to catalog (reuse existing fuzzy-matching logic)
+    if (ocrBtn) ocrBtn.textContent = "Se asociaza analizele...";
+    var matched = [];
+    var notMatched = [];
+    var analizeArr = Array.isArray(data.analize) ? data.analize : [];
+    console.log("[programari OCR] Analize extrase:", analizeArr.length, analizeArr);
+
+    for (var i = 0; i < analizeArr.length; i++) {
+      var rawText = analizeArr[i];
+      var match = (typeof findBestMatch === "function") ? findBestMatch(rawText) : null;
+      if (!match) {
+        console.warn("[programari OCR] Negăsit:", rawText);
+        notMatched.push(rawText);
+        continue;
+      }
+      // Get offers from ANALIZE_INDEX (same approach as scan flow / aceeasiCerereDinIstoric)
+      var key = (typeof normName === "function") ? normName(match.Denumire) : match.Denumire.toLowerCase();
+      var entry = (typeof ANALIZE_INDEX !== "undefined") ? ANALIZE_INDEX[key] : null;
+      if (!entry || !entry.offers || !entry.offers.length) {
+        console.warn("[programari OCR] Nu am oferte pentru:", match.Denumire);
+        notMatched.push(rawText);
+        continue;
+      }
+      var best = (typeof cheapestOffer === "function") ? cheapestOffer(entry) : { offer: entry.offers[0], finalPrice: entry.offers[0].Pret };
+      if (!best.offer) {
+        console.warn("[programari OCR] Nu am cheapest offer pentru:", match.Denumire);
+        notMatched.push(rawText);
+        continue;
+      }
+      matched.push({
+        displayName: match.Denumire,
+        cnpKey: rawText,
+        offer: best.offer,
+        finalPriceComputed: best.finalPrice
+      });
+    }
+
+    console.log("[programari OCR] Matched:", matched.length, "of", analizeArr.length);
+    if (matched.length === 0) {
+      // Show user what was extracted vs what we couldn't match
+      var msg = "OCR a procesat biletul dar nu am putut asocia nicio analiza cu catalogul.\n\n";
+      if (analizeArr.length === 0) {
+        msg += "Gemini nu a extras nicio analiza din imagine. Verifica daca imaginea e clara si contine un bilet cu lista de analize.";
+      } else {
+        msg += "Analize extrase din bilet: " + analizeArr.length + "\n";
+        msg += "Nu am putut asocia: " + notMatched.join(", ");
+      }
+      alert(msg);
+      if (ocrBtn) {
+        ocrBtn.disabled = false;
+        ocrBtn.textContent = "✨ Proceseaza OCR si creeaza cerere";
+      }
+      programariState.ocrInProgress = false;
+      return;
+    }
+
+    // 5. Build patient + items payload, save cerere with status='pending'
+    if (ocrBtn) ocrBtn.textContent = "Se salveaza cererea...";
+    var prenume = data.prenume || (p.nume_pacient || "").split(" ")[0] || "";
+    var nume = data.nume || (p.nume_pacient || "").split(" ").slice(1).join(" ") || "";
+
+    // Use same column names as saveCerere() — schema: total_lista_ron / total_final_ron / etc.
+    var itemsForDb = matched.map(function(m) {
+      var detalii = (typeof getDetails === "function") ? getDetails(m.offer.Laborator, m.displayName) : null;
+      var finalP = (m.finalPriceComputed != null) ? m.finalPriceComputed : m.offer.Pret;
+      return {
+        denumire: m.displayName,
+        laborator: m.offer.Laborator,
+        pret_lista: m.offer.Pret,
+        pret_final: Math.round(finalP * 100) / 100,
+        discount: m.offer.Pret > 0 ? Math.round((1 - finalP / m.offer.Pret) * 100) : 0,
+        timp: (m.offer.Timp && m.offer.Timp !== "N/A") ? m.offer.Timp : null,
+        categorie: (m.offer.Categorie && m.offer.Categorie !== "N/A") ? m.offer.Categorie : null,
+        detalii: detalii ? {
+          recipient: detalii.Recipient || null,
+          culoareDop: detalii.CuloareDop || null,
+          materialBiologic: detalii.MaterialBiologic || null,
+          cantitateMinima: detalii.CantitateMinima || null,
+          laboratorSubcontractant: detalii.LaboratorSubcontractant || null,
+          observatii: detalii.Observatii || null
+        } : null
+      };
+    });
+
+    // Compute totals + group by laborator
+    var totalLista = 0, totalFinal = 0;
+    var labMap = {};
+    for (var ix = 0; ix < itemsForDb.length; ix++) {
+      var it = itemsForDb[ix];
+      totalLista += Number(it.pret_lista) || 0;
+      totalFinal += Number(it.pret_final) || 0;
+      var lab = it.laborator || "Necunoscut";
+      if (!labMap[lab]) labMap[lab] = { laborator: lab, numar_analize: 0, subtotal_lista: 0, subtotal_final: 0 };
+      labMap[lab].numar_analize++;
+      labMap[lab].subtotal_lista += Number(it.pret_lista) || 0;
+      labMap[lab].subtotal_final += Number(it.pret_final) || 0;
+    }
+    var groupsForDb = Object.keys(labMap).map(function(k) {
+      var g = labMap[k];
+      g.economie = g.subtotal_lista - g.subtotal_final;
+      return g;
+    });
+
+    // Build a fake "report" obj for buildEprubetSummary (it expects items[].offer.Laborator + displayName)
+    var reportItems = matched.map(function(m) {
+      return { offer: m.offer, displayName: m.displayName };
+    });
+    var eprubeteSummary = (typeof buildEprubetSummary === "function") ? buildEprubetSummary(reportItems) : [];
+    var totalEprubete = 0;
+    var eprubeteDb = eprubeteSummary.map(function(e) {
+      totalEprubete += e.count;
+      return { tip: e.tip, bucati: e.count, pentruLocatii: e.breakdown };
+    });
+
+    var payload = {
+      pacient_prenume: prenume,
+      pacient_nume: nume,
+      cnp_pacient: data.cnp || null,
+      pacient_email: data.email || p.email_pacient || null,
+      pacient_telefon_prefix: (data.telefon || p.telefon_pacient) ? "+40" : null,
+      pacient_telefon_numar: data.telefon ? String(data.telefon).replace(/[\s\-\.]/g, "").replace(/^(\+40|0040|0)/, "") : (p.telefon_pacient || null),
+      user_id: window.__CURRENT_USER__ ? window.__CURRENT_USER__.id : null,
+      user_email: window.__CURRENT_USER__ ? window.__CURRENT_USER__.email : null,
+      numar_analize: itemsForDb.length,
+      numar_laboratoare: groupsForDb.length,
+      numar_eprubete: totalEprubete,
+      total_lista_ron: Math.round(totalLista * 100) / 100,
+      total_final_ron: Math.round(totalFinal * 100) / 100,
+      economie_ron: Math.round((totalLista - totalFinal) * 100) / 100,
+      items: itemsForDb,
+      groups: groupsForDb,
+      eprubete: eprubeteDb,
+      discounts: (typeof discounts !== "undefined") ? Object.assign({}, discounts) : {},
+      status: "pending",
+      programare_id: p.id
+    };
+
+    var insertRes = await window.sb.from("cc_cereri").insert([payload]).select().single();
+    if (insertRes.error) throw new Error("Eroare salvare cerere: " + insertRes.error.message);
+
+    var newCerereId = insertRes.data.id;
+
+    // 6. Update programare with cerere_id + status
+    var updRes = await window.sb.from("cc_programari")
+      .update({ status: "ocr_processed", cerere_id: newCerereId })
+      .eq("id", p.id);
+    if (updRes.error) console.warn("[programari] Update status failed:", updRes.error);
+
+    // Refresh & close
+    alert("OCR procesat cu succes!\n\nAnalize gasite: " + matched.length + "\nCerere creata: #" + newCerereId + " (status: pending)\n\nCererea apare acum si in tab-ul Istoric. Cand pacientul vine, deschide cererea, verifica datele, si apasa Proceseaza cererea.");
+    closeProgramareModal();
+    await loadProgramari();
+  } catch (e) {
+    console.error("[programari] OCR error:", e);
+    alert("Eroare la procesarea OCR: " + (e.message || e));
+    if (ocrBtn) {
+      ocrBtn.disabled = false;
+      ocrBtn.textContent = "✨ Proceseaza OCR si creeaza cerere";
+    }
+  } finally {
+    programariState.ocrInProgress = false;
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function() {
+      // data:image/jpeg;base64,XXXXX → strip prefix
+      var result = reader.result;
+      var base64 = result.indexOf(",") >= 0 ? result.split(",")[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = function() { reject(new Error("Read error")); };
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Open the saved pending cerere in the cart
+async function openCerereFromProgramare(cerereId) {
+  if (!cerereId) return;
+  try {
+    var res = await window.sb.from("cc_cereri").select("*").eq("id", cerereId).single();
+    if (res.error) throw new Error(res.error.message);
+    var c = res.data;
+    if (typeof loadCererInCart === "function") {
+      loadCererInCart(c);
+    } else {
+      // Inline implementation if helper not present
+      cartState.prenume = c.pacient_prenume || "";
+      cartState.nume = c.pacient_nume || "";
+      cartState.cnp = c.cnp_pacient || "";
+      cartState.email = c.pacient_email || "";
+      cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+      cartState.telefonNumar = c.pacient_telefon_numar || "";
+
+      // Mark as loaded-from-pending (used by saveCerere to decide insert vs update)
+      window.__loadedPendingCerereId = c.status === "pending" ? c.id : null;
+      window.__loadedPendingProgId = c.programare_id || null;
+
+      // Repopulate inputs
+      prenumeInput.value = cartState.prenume;
+      numeInput.value = cartState.nume;
+      cnpInput.value = cartState.cnp;
+      emailInput.value = cartState.email;
+      telefonNumarInput.value = cartState.telefonNumar;
+      if (telefonPrefixSelect) telefonPrefixSelect.value = cartState.telefonPrefix;
+      // Trigger validation/UI refresh (functions defined elsewhere in app.js)
+      if (typeof updateNumeField === "function") {
+        updateNumeField(prenumeInput, "prenume");
+        updateNumeField(numeInput, "nume");
+      }
+      if (typeof updateCnpUi === "function") updateCnpUi();
+
+      // Clear cart, then add items from cerere
+      cartState.cart = [];
+      var items = Array.isArray(c.items) ? c.items : [];
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (typeof addToCart === "function") {
+          addToCart(it.denumire, it.laborator);
+        }
+      }
+      renderCart();
+    }
+
+    closeProgramareModal();
+    switchView("cart");
+  } catch (e) {
+    alert("Eroare la incarcare cerere: " + (e.message || e));
+  }
+}
+
+async function cancelProgramare(p) {
+  if (!confirm("Sigur vrei sa anulezi aceasta programare?")) return;
+  try {
+    var res = await window.sb.from("cc_programari")
+      .update({ status: "cancelled" })
+      .eq("id", p.id);
+    if (res.error) throw new Error(res.error.message);
+    closeProgramareModal();
+    await loadProgramari();
+  } catch (e) {
+    alert("Eroare: " + (e.message || e));
+  }
+}
+
+function editProgramare(p) {
+  closeProgramareModal();
+  // Open Add modal in edit mode
+  openAddProgramareModal(p);
+}
+
+// Modal: Add (or edit) programare manually
+function openAddProgramareModal(existing) {
+  var modal = document.getElementById("addProgramareModal");
+  var emailEl = document.getElementById("addProgEmail");
+  var numeEl = document.getElementById("addProgNume");
+  var telEl = document.getElementById("addProgTelefon");
+  var dataEl = document.getElementById("addProgData");
+  var servEl = document.getElementById("addProgServiciu");
+  var docEl = document.getElementById("addProgDoctor");
+  var noteEl = document.getElementById("addProgNote");
+  var errEl = document.getElementById("addProgError");
+  var saveBtn = document.getElementById("addProgSave");
+
+  errEl.classList.remove("visible");
+  errEl.textContent = "";
+
+  if (existing) {
+    window.__editingProgramareId = existing.id;
+    document.querySelector("#addProgramareModal .modal-title").textContent = "Editeaza programare";
+    saveBtn.textContent = "Salveaza modificari";
+    emailEl.value = existing.email_pacient || "";
+    numeEl.value = existing.nume_pacient || "";
+    telEl.value = existing.telefon_pacient || "";
+    // Convert ISO to local datetime-local format
+    if (existing.data_programare) {
+      var d = new Date(existing.data_programare);
+      var pad = function(n) { return String(n).padStart(2, "0"); };
+      dataEl.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+    } else {
+      dataEl.value = "";
+    }
+    servEl.value = existing.tip_serviciu || "Recoltare analize";
+    docEl.value = existing.nume_doctor || "";
+    noteEl.value = existing.note || "";
+  } else {
+    window.__editingProgramareId = null;
+    document.querySelector("#addProgramareModal .modal-title").textContent = "Adauga programare";
+    saveBtn.textContent = "Adauga programare";
+    emailEl.value = "";
+    numeEl.value = "";
+    telEl.value = "";
+    dataEl.value = "";
+    servEl.value = "Recoltare analize";
+    docEl.value = "";
+    noteEl.value = "";
+  }
+
+  modal.classList.add("visible");
+}
+
+function closeAddProgramareModal() {
+  document.getElementById("addProgramareModal").classList.remove("visible");
+  window.__editingProgramareId = null;
+}
+
+async function saveProgramareManual() {
+  var emailEl = document.getElementById("addProgEmail");
+  var numeEl = document.getElementById("addProgNume");
+  var telEl = document.getElementById("addProgTelefon");
+  var dataEl = document.getElementById("addProgData");
+  var servEl = document.getElementById("addProgServiciu");
+  var docEl = document.getElementById("addProgDoctor");
+  var noteEl = document.getElementById("addProgNote");
+  var errEl = document.getElementById("addProgError");
+  var saveBtn = document.getElementById("addProgSave");
+
+  var email = emailEl.value.trim();
+  var data = dataEl.value;
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errEl.textContent = "Email valid e obligatoriu.";
+    errEl.classList.add("visible");
+    return;
+  }
+  if (!data) {
+    errEl.textContent = "Data programarii e obligatorie.";
+    errEl.classList.add("visible");
+    return;
+  }
+
+  errEl.classList.remove("visible");
+  saveBtn.disabled = true;
+  var origText = saveBtn.textContent;
+  saveBtn.textContent = "Se salveaza...";
+
+  try {
+    // Try to link to existing pacient by email
+    var pacient_id = null;
+    try {
+      var pacRes = await window.sb.from("pacienti").select("id").eq("email", email).maybeSingle();
+      if (pacRes.data) pacient_id = pacRes.data.id;
+    } catch (e) { /* ignore */ }
+
+    var payload = {
+      email_pacient: email,
+      nume_pacient: numeEl.value.trim() || null,
+      telefon_pacient: telEl.value.trim() || null,
+      data_programare: new Date(data).toISOString(),
+      tip_serviciu: servEl.value.trim() || "Recoltare analize",
+      nume_doctor: docEl.value.trim() || null,
+      note: noteEl.value.trim() || null,
+      pacient_id: pacient_id
+    };
+
+    var res;
+    if (window.__editingProgramareId) {
+      res = await window.sb.from("cc_programari")
+        .update(payload)
+        .eq("id", window.__editingProgramareId)
+        .select();
+    } else {
+      res = await window.sb.from("cc_programari").insert([payload]).select();
+    }
+    if (res.error) throw new Error(res.error.message);
+
+    closeAddProgramareModal();
+    await loadProgramari();
+  } catch (e) {
+    errEl.textContent = "Eroare: " + (e.message || e);
+    errEl.classList.add("visible");
+  }
+  saveBtn.disabled = false;
+  saveBtn.textContent = origText;
+}
+
+// Wire up programari module
+(function() {
+  // Filter buttons
+  var filterBtns = document.querySelectorAll(".prog-filter-btn");
+  for (var i = 0; i < filterBtns.length; i++) {
+    (function(btn) {
+      btn.addEventListener("click", function() {
+        programariState.filter = btn.getAttribute("data-prog-filter");
+        // Update active state
+        for (var k = 0; k < filterBtns.length; k++) filterBtns[k].classList.remove("active");
+        btn.classList.add("active");
+        renderProgramari();
+      });
+    })(filterBtns[i]);
+  }
+
+  // Modal close
+  var modalClose = document.getElementById("programareModalClose");
+  if (modalClose) modalClose.addEventListener("click", closeProgramareModal);
+  var modal = document.getElementById("programareModal");
+  if (modal) modal.addEventListener("click", function(e) {
+    if (e.target === modal) closeProgramareModal();
+  });
+
+  // Add programare manual
+  var btnAdd = document.getElementById("btnAddProgramare");
+  if (btnAdd) btnAdd.addEventListener("click", function() { openAddProgramareModal(null); });
+  var addClose = document.getElementById("addProgramareClose");
+  if (addClose) addClose.addEventListener("click", closeAddProgramareModal);
+  var addCancel = document.getElementById("addProgCancel");
+  if (addCancel) addCancel.addEventListener("click", closeAddProgramareModal);
+  var addSave = document.getElementById("addProgSave");
+  if (addSave) addSave.addEventListener("click", saveProgramareManual);
+  var addModal = document.getElementById("addProgramareModal");
+  if (addModal) addModal.addEventListener("click", function(e) {
+    if (e.target === addModal) closeAddProgramareModal();
+  });
+})();
+
+// ════════════════════════════════════════════════════════════════
+// Open a PENDING cerere from istoric/programari directly in cart
+// ════════════════════════════════════════════════════════════════
+function openPendingCerereInCart(cerereId) {
+  var c = istoricState.cereri.find(function(x){ return x.id === cerereId; });
+  if (!c) {
+    // Maybe it was just created via programari - fetch fresh
+    window.sb.from("cc_cereri").select("*").eq("id", cerereId).single().then(function(res) {
+      if (res.error || !res.data) {
+        alert("Cerere negasita: " + (res.error ? res.error.message : "necunoscuta"));
+        return;
+      }
+      _loadPendingIntoCart(res.data);
+    });
+    return;
+  }
+  _loadPendingIntoCart(c);
+}
+
+function _loadPendingIntoCart(c) {
+  // Mark this cerere as the pending one to update on save
+  window.__loadedPendingCerereId = c.id;
+  window.__loadedPendingProgId = c.programare_id || null;
+
+  // Fill patient
+  prenumeInput.value = c.pacient_prenume || "";
+  numeInput.value = c.pacient_nume || "";
+  cnpInput.value = c.cnp_pacient || "";
+  emailInput.value = c.pacient_email || "";
+  if (telefonPrefixSelect) telefonPrefixSelect.value = c.pacient_telefon_prefix || "+40";
+  telefonNumarInput.value = c.pacient_telefon_numar || "";
+
+  cartState.prenume = c.pacient_prenume || "";
+  cartState.nume = c.pacient_nume || "";
+  cartState.cnp = c.cnp_pacient || "";
+  cartState.email = c.pacient_email || "";
+  cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
+  cartState.telefonNumar = c.pacient_telefon_numar || "";
+
+  // Rebuild cart
+  cartState.cart = [];
+  var notFound = [];
+  var items = c.items || [];
+  for (var i = 0; i < items.length; i++) {
+    var den = items[i].denumire;
+    var lab = items[i].laborator;
+    var key = normName(den);
+    var entry = ANALIZE_INDEX[key];
+    if (entry) {
+      // Try to find exact lab match, else cheapest
+      var offers = entry.offers || [];
+      var match = null;
+      for (var k = 0; k < offers.length; k++) {
+        if (offers[k].Laborator === lab) { match = offers[k]; break; }
+      }
+      if (match) {
+        addToCart(key, match.Laborator);
+      } else {
+        var best = cheapestOffer(entry);
+        if (best.offer) addToCart(key, best.offer.Laborator);
+        else notFound.push(den);
+      }
+    } else {
+      notFound.push(den);
+    }
+  }
+  updateNumeField(prenumeInput, "prenume");
+  updateNumeField(numeInput, "nume");
+  updateCnpUi();
+  renderCart();
+  switchView("cart");
+  if (notFound.length) {
+    alert("Atentie: " + notFound.length + " analize din cererea pending nu au fost gasite in catalog: " + notFound.join(", "));
+  }
 }
