@@ -2835,7 +2835,7 @@ function renderIstoric() {
         else if (act === "json") exportIstoricJson(id);
         else if (act === "noua") cerereNouaDinIstoric(id);
         else if (act === "same") aceeasiCerereDinIstoric(id);
-        else if (act === "open-pending") openPendingCerereInCart(parseInt(id, 10));
+        else if (act === "open-pending") openPendingCerereInCart(id);
       });
     })(btns[i]);
   }
@@ -5428,49 +5428,10 @@ async function openCerereFromProgramare(cerereId) {
     var res = await window.sb.from("cc_cereri").select("*").eq("id", cerereId).single();
     if (res.error) throw new Error(res.error.message);
     var c = res.data;
-    if (typeof loadCererInCart === "function") {
-      loadCererInCart(c);
-    } else {
-      // Inline implementation if helper not present
-      cartState.prenume = c.pacient_prenume || "";
-      cartState.nume = c.pacient_nume || "";
-      cartState.cnp = c.cnp_pacient || "";
-      cartState.email = c.pacient_email || "";
-      cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
-      cartState.telefonNumar = c.pacient_telefon_numar || "";
-
-      // Mark as loaded-from-pending (used by saveCerere to decide insert vs update)
-      window.__loadedPendingCerereId = c.status === "pending" ? c.id : null;
-      window.__loadedPendingProgId = c.programare_id || null;
-
-      // Repopulate inputs
-      prenumeInput.value = cartState.prenume;
-      numeInput.value = cartState.nume;
-      cnpInput.value = cartState.cnp;
-      emailInput.value = cartState.email;
-      telefonNumarInput.value = cartState.telefonNumar;
-      if (telefonPrefixSelect) telefonPrefixSelect.value = cartState.telefonPrefix;
-      // Trigger validation/UI refresh (functions defined elsewhere in app.js)
-      if (typeof updateNumeField === "function") {
-        updateNumeField(prenumeInput, "prenume");
-        updateNumeField(numeInput, "nume");
-      }
-      if (typeof updateCnpUi === "function") updateCnpUi();
-
-      // Clear cart, then add items from cerere
-      cartState.cart = [];
-      var items = Array.isArray(c.items) ? c.items : [];
-      for (var i = 0; i < items.length; i++) {
-        var it = items[i];
-        if (typeof addToCart === "function") {
-          addToCart(it.denumire, it.laborator);
-        }
-      }
-      renderCart();
-    }
-
+    // Reuse the same loader used from Istoric — handles normName/addToCart correctly
+    _loadPendingIntoCart(c);
     closeProgramareModal();
-    switchView("cart");
+    // _loadPendingIntoCart already calls switchView("cart")
   } catch (e) {
     alert("Eroare la incarcare cerere: " + (e.message || e));
   }
