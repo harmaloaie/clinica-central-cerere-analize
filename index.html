@@ -30,6 +30,7 @@
       <button class="topbar-tab active" data-view="cart" role="tab" aria-selected="true">Cerere analize</button>
       <button class="topbar-tab" data-view="browse" role="tab" aria-selected="false">Explorator preturi</button>
       <button class="topbar-tab" data-view="istoric" role="tab" aria-selected="false">Istoric cereri</button>
+      <button class="topbar-tab" data-view="programari" role="tab" aria-selected="false">Programari</button>
       <button class="topbar-tab" data-view="borderouri" role="tab" aria-selected="false">Borderouri</button>
       <button class="topbar-tab admin-only" data-view="admin" role="tab" aria-selected="false" id="tabAdmin" style="display:none">Admin preturi</button>
     </nav>
@@ -324,6 +325,92 @@
       <div class="istoric-loading">Alege data si laboratorul, apoi vezi aici previzualizarea.</div>
     </div>
   </main>
+</div>
+
+<!-- ═════════════════════════════════════════════════════════════ -->
+<!-- VIEW: PROGRAMARI (toti userii cu acces_central) -->
+<!-- ═════════════════════════════════════════════════════════════ -->
+<div class="view" id="viewProgramari" style="display:none">
+  <main class="main wide">
+    <div class="istoric-header">
+      <div>
+        <div class="pane-label">Programari</div>
+        <h2 class="pane-title">Programari pacienti</h2>
+        <p class="pane-sub">Toate programarile, cu posibilitatea de a procesa OCR pe bilete urcate si crea cereri pre-completate.</p>
+      </div>
+      <button type="button" class="admin-btn-add" id="btnAddProgramare">+ Adauga programare manuala</button>
+    </div>
+
+    <div class="programari-filters">
+      <button class="prog-filter-btn active" data-prog-filter="all">Toate</button>
+      <button class="prog-filter-btn" data-prog-filter="scheduled">Doar programate</button>
+      <button class="prog-filter-btn" data-prog-filter="bilet_uploaded">Cu bilet urcat</button>
+      <button class="prog-filter-btn" data-prog-filter="ocr_processed">OCR procesat</button>
+      <button class="prog-filter-btn" data-prog-filter="completed">Completate</button>
+      <button class="prog-filter-btn" data-prog-filter="upcoming">Viitoare</button>
+    </div>
+
+    <div class="programari-list" id="programariList">
+      <div class="istoric-loading">Se incarca programarile...</div>
+    </div>
+  </main>
+</div>
+
+<!-- Modal: vizualizare/edit programare -->
+<div class="modal-overlay" id="programareModal">
+  <div class="modal-box programare-modal-box">
+    <button class="modal-close" id="programareModalClose" type="button">&times;</button>
+    <div class="modal-header">
+      <div class="modal-tag" id="programareModalTag">Programare</div>
+      <h2 class="modal-title" id="programareModalTitle">Detalii programare</h2>
+    </div>
+    <div class="modal-body" id="programareModalBody">
+      <!-- populated by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- Modal: adauga programare manuala -->
+<div class="modal-overlay" id="addProgramareModal">
+  <div class="modal-box admin-edit-box">
+    <button class="modal-close" id="addProgramareClose" type="button">&times;</button>
+    <div class="modal-header">
+      <div class="modal-tag">Programare manuala</div>
+      <h2 class="modal-title">Adauga programare</h2>
+      <p class="modal-sub">Pentru programari care nu sunt din Calendly (telefonic, walk-in, etc).</p>
+    </div>
+    <div class="modal-body">
+      <div class="admin-form">
+        <label class="admin-label" for="addProgEmail">Email pacient *</label>
+        <input type="email" class="admin-input" id="addProgEmail" placeholder="pacient@email.ro">
+
+        <label class="admin-label" for="addProgNume" style="margin-top:14px">Nume complet</label>
+        <input type="text" class="admin-input" id="addProgNume" placeholder="Ion Popescu">
+
+        <label class="admin-label" for="addProgTelefon" style="margin-top:14px">Telefon</label>
+        <input type="text" class="admin-input" id="addProgTelefon" placeholder="07XX XXX XXX">
+
+        <label class="admin-label" for="addProgData" style="margin-top:14px">Data si ora programare *</label>
+        <input type="datetime-local" class="admin-input" id="addProgData">
+
+        <label class="admin-label" for="addProgServiciu" style="margin-top:14px">Tip serviciu</label>
+        <input type="text" class="admin-input" id="addProgServiciu" value="Recoltare analize">
+
+        <label class="admin-label" for="addProgDoctor" style="margin-top:14px">Nume doctor (optional)</label>
+        <input type="text" class="admin-input" id="addProgDoctor" placeholder="Dr. ...">
+
+        <label class="admin-label" for="addProgNote" style="margin-top:14px">Note (optional)</label>
+        <textarea class="admin-input" id="addProgNote" rows="2" placeholder="Detalii suplimentare"></textarea>
+
+        <div id="addProgError" class="admin-error"></div>
+
+        <div class="admin-form-actions">
+          <button type="button" class="admin-btn-cancel" id="addProgCancel">Anuleaza</button>
+          <button type="button" class="admin-btn-save" id="addProgSave">Adauga programare</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ═════════════════════════════════════════════════════════════ -->
