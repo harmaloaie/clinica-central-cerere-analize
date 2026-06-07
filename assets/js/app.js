@@ -5278,29 +5278,78 @@ async function processProgramareOcr(p) {
     var prenume = data.prenume || (p.nume_pacient || "").split(" ")[0] || "";
     var nume = data.nume || (p.nume_pacient || "").split(" ").slice(1).join(" ") || "";
 
+    // Use same column names as saveCerere() — schema: total_lista_ron / total_final_ron / etc.
     var itemsForDb = matched.map(function(m) {
       var ep = (typeof effectivePrice === "function") ? effectivePrice(m.displayName, m.offer) : { finalPrice: m.offer.Pret, discountPct: 0 };
+      var detalii = (typeof getDetails === "function") ? getDetails(m.offer.Laborator, m.displayName) : null;
       return {
         denumire: m.displayName,
         laborator: m.offer.Laborator,
-        pret_baza: m.offer.Pret,
-        pret_final: ep.finalPrice,
-        discount_pct: ep.discountPct || 0,
-        timp_executie: (m.offer.Timp && m.offer.Timp !== "N/A") ? m.offer.Timp : null
+        pret_lista: m.offer.Pret,
+        pret_final: Math.round((ep.finalPrice || m.offer.Pret) * 100) / 100,
+        discount: ep.discountPct || 0,
+        timp: (m.offer.Timp && m.offer.Timp !== "N/A") ? m.offer.Timp : null,
+        categorie: (m.offer.Categorie && m.offer.Categorie !== "N/A") ? m.offer.Categorie : null,
+        detalii: detalii ? {
+          recipient: detalii.Recipient || null,
+          culoareDop: detalii.CuloareDop || null,
+          materialBiologic: detalii.MaterialBiologic || null,
+          cantitateMinima: detalii.CantitateMinima || null,
+          laboratorSubcontractant: detalii.LaboratorSubcontractant || null,
+          observatii: detalii.Observatii || null
+        } : null
       };
     });
 
-    var grandTotal = itemsForDb.reduce(function(sum, it) { return sum + (Number(it.pret_final) || 0); }, 0);
+    // Compute totals + group by laborator
+    var totalLista = 0, totalFinal = 0;
+    var labMap = {};
+    for (var ix = 0; ix < itemsForDb.length; ix++) {
+      var it = itemsForDb[ix];
+      totalLista += Number(it.pret_lista) || 0;
+      totalFinal += Number(it.pret_final) || 0;
+      var lab = it.laborator || "Necunoscut";
+      if (!labMap[lab]) labMap[lab] = { laborator: lab, numar_analize: 0, subtotal_lista: 0, subtotal_final: 0 };
+      labMap[lab].numar_analize++;
+      labMap[lab].subtotal_lista += Number(it.pret_lista) || 0;
+      labMap[lab].subtotal_final += Number(it.pret_final) || 0;
+    }
+    var groupsForDb = Object.keys(labMap).map(function(k) {
+      var g = labMap[k];
+      g.economie = g.subtotal_lista - g.subtotal_final;
+      return g;
+    });
+
+    // Build a fake "report" obj for buildEprubetSummary (it expects items[].offer.Laborator + displayName)
+    var reportItems = matched.map(function(m) {
+      return { offer: m.offer, displayName: m.displayName };
+    });
+    var eprubeteSummary = (typeof buildEprubetSummary === "function") ? buildEprubetSummary(reportItems) : [];
+    var totalEprubete = 0;
+    var eprubeteDb = eprubeteSummary.map(function(e) {
+      totalEprubete += e.count;
+      return { tip: e.tip, bucati: e.count, pentruLocatii: e.breakdown };
+    });
 
     var payload = {
       pacient_prenume: prenume,
       pacient_nume: nume,
       cnp_pacient: data.cnp || null,
       pacient_email: data.email || p.email_pacient || null,
-      pacient_telefon_prefix: "+40",
-      pacient_telefon_numar: data.telefon ? String(data.telefon).replace(/^(\+40|0040|0)/, "") : (p.telefon_pacient || null),
+      pacient_telefon_prefix: (data.telefon || p.telefon_pacient) ? "+40" : null,
+      pacient_telefon_numar: data.telefon ? String(data.telefon).replace(/[\s\-\.]/g, "").replace(/^(\+40|0040|0)/, "") : (p.telefon_pacient || null),
+      user_id: window.__CURRENT_USER__ ? window.__CURRENT_USER__.id : null,
+      user_email: window.__CURRENT_USER__ ? window.__CURRENT_USER__.email : null,
+      numar_analize: itemsForDb.length,
+      numar_laboratoare: groupsForDb.length,
+      numar_eprubete: totalEprubete,
+      total_lista_ron: Math.round(totalLista * 100) / 100,
+      total_final_ron: Math.round(totalFinal * 100) / 100,
+      economie_ron: Math.round((totalLista - totalFinal) * 100) / 100,
       items: itemsForDb,
-      grand_total: Math.round(grandTotal * 100) / 100,
+      groups: groupsForDb,
+      eprubete: eprubeteDb,
+      discounts: (typeof discounts !== "undefined") ? Object.assign({}, discounts) : {},
       status: "pending",
       programare_id: p.id
     };
