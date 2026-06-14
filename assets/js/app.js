@@ -824,30 +824,25 @@ function renderCart() {
     html += '<button class="cart-item-remove" data-key="' + esc(c.key) + '" data-lab="' + esc(lab) + '" title="Sterge">&times;</button>';
     html += '</div></div>';
   }
-  cartListEl.innerHTML = html;
+  // Build CC discount banner HTML if active
+  var ccBannerHtml = '';
+  if (cartState.ccDiscountPct > 0) {
+    ccBannerHtml = '<div id="ccDiscountBanner" style="padding:10px 14px;background:rgba(26,107,60,0.1);border:1px solid rgba(26,107,60,0.3);border-radius:4px;margin-bottom:10px;font-size:12px;color:#155a32;display:flex;justify-content:space-between;align-items:center">' +
+      '<span><strong>🏷️ Discount CC activ: ' + cartState.ccDiscountPct + '%</strong> (din card pacient)</span>' +
+      '<button type="button" id="btnClearCcDisc" style="background:transparent;border:1px solid rgba(26,107,60,0.4);padding:3px 8px;font-size:10px;cursor:pointer;color:#155a32;border-radius:3px">Elimina</button>' +
+      '</div>';
+  }
+
+  cartListEl.innerHTML = ccBannerHtml + html;
   cartTotalEl.textContent = fmtRon(total);
 
-  // Show CC discount banner if active
-  var ccBanner = document.getElementById("ccDiscountBanner");
-  if (cartState.ccDiscountPct > 0) {
-    if (!ccBanner) {
-      ccBanner = document.createElement("div");
-      ccBanner.id = "ccDiscountBanner";
-      ccBanner.style.cssText = "padding:10px 14px;background:rgba(26,107,60,0.1);border:1px solid rgba(26,107,60,0.3);border-radius:4px;margin:10px 0;font-size:12px;color:#155a32;display:flex;justify-content:space-between;align-items:center";
-      cartListEl.parentNode.insertBefore(ccBanner, cartTotalEl.parentNode);
-    }
-    ccBanner.innerHTML = '<span><strong>🏷️ Discount CC activ: ' + cartState.ccDiscountPct + '%</strong> (din card pacient)</span>' +
-      '<button type="button" id="btnClearCcDisc" style="background:transparent;border:1px solid rgba(26,107,60,0.4);padding:3px 8px;font-size:10px;cursor:pointer;color:#155a32;border-radius:3px">Elimină</button>';
-    ccBanner.style.display = "flex";
-    var clearBtn = document.getElementById("btnClearCcDisc");
-    if (clearBtn) {
-      clearBtn.addEventListener("click", function() {
-        cartState.ccDiscountPct = 0;
-        renderCart();
-      });
-    }
-  } else if (ccBanner) {
-    ccBanner.style.display = "none";
+  // Wire CC discount clear button (if rendered)
+  var clearBtn = document.getElementById("btnClearCcDisc");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", function() {
+      cartState.ccDiscountPct = 0;
+      renderCart();
+    });
   }
 
   // ─── Live eprubete summary ───
