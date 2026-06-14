@@ -79,12 +79,22 @@ function getCCPrice(denumire) {
 // Effective price = pret CC if available, else lab discounted price + 5% markup.
 // Used for the FINAL report (modal + Excel + JSON + Istoric) so we charge
 // our own catalog price; lab pricing stays visible only in cart for comparison.
+// CC discount (cartState.ccDiscountPct) is applied when source="cc" — adminul vede
+// pretul cu discountul CC al pacientului (din card) aplicat.
 function effectivePrice(denumire, laborator, pretLista) {
   var cc = getCCPrice(denumire);
-  if (cc !== null) return { price: cc, source: "cc" };
+  if (cc !== null) {
+    // CC pricing path - apply CC discount if active (from pacient card)
+    var ccDiscPct = (cartState && Number(cartState.ccDiscountPct)) || 0;
+    if (ccDiscPct > 0) {
+      var ccDiscounted = Math.round(cc * (1 - ccDiscPct / 100) * 100) / 100;
+      return { price: ccDiscounted, source: "cc", listPrice: cc, ccDiscount: ccDiscPct };
+    }
+    return { price: cc, source: "cc", listPrice: cc, ccDiscount: 0 };
+  }
   // Fallback: discounted lab price + 5%
   var discounted = finalPrice(pretLista, laborator);
-  return { price: Math.round(discounted * 1.05 * 100) / 100, source: "lab+5%" };
+  return { price: Math.round(discounted * 1.05 * 100) / 100, source: "lab+5%", listPrice: pretLista, ccDiscount: 0 };
 }
 
 // Cached base64 representation of the topbar logo, used for PDF exports.
@@ -312,6 +322,8 @@ var cartState = {
   numeMedic: "",       // populated from OCR if available
   sex: "",             // M or F, derived from CNP or OCR
   dataNasterii: "",    // DD.MM.YYYY, from OCR or CNP
+  // CC discount (from pacient card, applied to CC prices in cart total)
+  ccDiscountPct: 0,    // 0 = no CC discount (no card or non-matching card discount)
   // Validation flags
   prenumeValid: false,
   numeValid: false,
@@ -815,6 +827,29 @@ function renderCart() {
   cartListEl.innerHTML = html;
   cartTotalEl.textContent = fmtRon(total);
 
+  // Show CC discount banner if active
+  var ccBanner = document.getElementById("ccDiscountBanner");
+  if (cartState.ccDiscountPct > 0) {
+    if (!ccBanner) {
+      ccBanner = document.createElement("div");
+      ccBanner.id = "ccDiscountBanner";
+      ccBanner.style.cssText = "padding:10px 14px;background:rgba(26,107,60,0.1);border:1px solid rgba(26,107,60,0.3);border-radius:4px;margin:10px 0;font-size:12px;color:#155a32;display:flex;justify-content:space-between;align-items:center";
+      cartListEl.parentNode.insertBefore(ccBanner, cartTotalEl.parentNode);
+    }
+    ccBanner.innerHTML = '<span><strong>🏷️ Discount CC activ: ' + cartState.ccDiscountPct + '%</strong> (din card pacient)</span>' +
+      '<button type="button" id="btnClearCcDisc" style="background:transparent;border:1px solid rgba(26,107,60,0.4);padding:3px 8px;font-size:10px;cursor:pointer;color:#155a32;border-radius:3px">Elimină</button>';
+    ccBanner.style.display = "flex";
+    var clearBtn = document.getElementById("btnClearCcDisc");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function() {
+        cartState.ccDiscountPct = 0;
+        renderCart();
+      });
+    }
+  } else if (ccBanner) {
+    ccBanner.style.display = "none";
+  }
+
   // ─── Live eprubete summary ───
   var summaryItems = [];
   for (var i = 0; i < cartState.cart.length; i++) {
@@ -865,6 +900,9 @@ document.getElementById("btnClearCart").addEventListener("click", function() {
   if (cartState.cart.length === 0) return;
   if (confirm("Vrei sa golesti cererea de analize?")) {
     cartState.cart = [];
+    cartState.ccDiscountPct = 0;  // reset CC discount
+    window.__loadedPendingCerereId = null;
+    window.__loadedPendingProgId = null;
     renderCart();
     doCartSearch();
   }
@@ -934,23 +972,35 @@ function buildReport() {
       key: c.key,
       displayName: c.displayName,
       offer: c.offer,
-      finalPrice: eff.price,       // CC price (or lab+5% fallback) — used everywhere downstream
-      labFinalPrice: labFinal,     // Kept for reference if needed
-      priceSource: eff.source,     // "cc" or "lab+5%"
+      finalPrice: eff.price,            // Pret CC cu discount CC aplicat (sau lab+5% fallback)
+      ccListPrice: eff.listPrice || null,  // Pret CC INAINTE de discount CC (pentru afisaj)
+      ccDiscountApplied: eff.ccDiscount || 0,  // % discount CC aplicat la acest item
+      labFinalPrice: labFinal,          // Kept for reference if needed
+      priceSource: eff.source,          // "cc" or "lab+5%"
       discount: discPct(c.offer.Laborator)
     });
   }
   var groups = {};
+  var grandCcListTotal = 0;
   for (var i = 0; i < items.length; i++) {
     var lab = items[i].offer.Laborator;
-    if (!groups[lab]) groups[lab] = { lab: lab, items: [], total: 0, listTotal: 0 };
+    if (!groups[lab]) groups[lab] = { lab: lab, items: [], total: 0, listTotal: 0, ccListTotal: 0 };
     groups[lab].items.push(items[i]);
     groups[lab].total += items[i].finalPrice;
     groups[lab].listTotal += items[i].offer.Pret;
+    var ccListPrice = (items[i].ccListPrice != null) ? items[i].ccListPrice : items[i].finalPrice;
+    groups[lab].ccListTotal += ccListPrice;
+    grandCcListTotal += ccListPrice;
   }
   var groupsList = Object.keys(groups).map(function(l){ return groups[l]; });
   groupsList.sort(function(a, b){ return b.total - a.total; });
-  return { items: items, groups: groupsList, grandTotal: grandTotal, grandListTotal: grandListTotal };
+  return {
+    items: items,
+    groups: groupsList,
+    grandTotal: grandTotal,
+    grandListTotal: grandListTotal,
+    grandCcListTotal: grandCcListTotal  // Suma preturilor CC fara discount CC aplicat
+  };
 }
 
 function openReport() {
@@ -1039,9 +1089,16 @@ function openReport() {
         body += '</div>';
       }
       body += '</div>';
-      body += '<div class="lab-group-item-price">' + Math.round(it.finalPrice) + ' RON';
+      body += '<div class="lab-group-item-price">';
+      // If CC discount was applied, show original CC list price (struck) + final price
+      if (it.ccDiscountApplied > 0 && it.ccListPrice && it.ccListPrice > it.finalPrice) {
+        body += '<s style="opacity:0.5;font-weight:400;font-size:12px;margin-right:6px">' + Math.round(it.ccListPrice) + ' RON</s>';
+      }
+      body += Math.round(it.finalPrice) + ' RON';
       if (it.priceSource === "lab+5%") {
         body += '<span class="lab-group-item-price-src" title="Nu exista pret in catalogul Clinica Central; folosit pret laborator cu discount +5%">lab + 5%</span>';
+      } else if (it.ccDiscountApplied > 0) {
+        body += '<span class="lab-group-item-price-src" title="Pret CC cu discount card -' + it.ccDiscountApplied + '% aplicat">CC -' + it.ccDiscountApplied + '%</span>';
       } else {
         body += '<span class="lab-group-item-price-src" title="Pret din catalogul Clinica Central">CC</span>';
       }
@@ -1052,7 +1109,18 @@ function openReport() {
 
   body += '<div class="report-grand-total">';
   body += '<span class="report-grand-total-label">Total de plata</span>';
-  body += '<span class="report-grand-total-value">' + fmtRon(r.grandTotal) + '</span>';
+  // If CC discount was applied, show original total (struck) + savings
+  var ccDiscActive = cartState.ccDiscountPct > 0;
+  if (ccDiscActive && r.grandCcListTotal && r.grandCcListTotal > r.grandTotal + 0.01) {
+    var economie = r.grandCcListTotal - r.grandTotal;
+    body += '<div style="text-align:right">';
+    body += '<div style="font-size:14px;text-decoration:line-through;opacity:0.5;font-weight:400">' + fmtRon(r.grandCcListTotal) + '</div>';
+    body += '<span class="report-grand-total-value">' + fmtRon(r.grandTotal) + '</span>';
+    body += '<div style="font-size:11px;color:#1a6b3c;font-weight:600;margin-top:2px">Economie: ' + fmtRon(economie) + ' (-' + cartState.ccDiscountPct + '% CC)</div>';
+    body += '</div>';
+  } else {
+    body += '<span class="report-grand-total-value">' + fmtRon(r.grandTotal) + '</span>';
+  }
   body += '</div>';
 
   body += '<div class="report-actions">';
@@ -2717,18 +2785,19 @@ async function saveCerere(r) {
     numar_analize: r.items.length,
     numar_laboratoare: r.groups.length,
     numar_eprubete: totalEprubete,
-    total_lista_ron: r.grandListTotal,
+    total_lista_ron: (cartState.ccDiscountPct > 0 && r.grandCcListTotal) ? r.grandCcListTotal : r.grandListTotal,
     total_final_ron: r.grandTotal,
-    economie_ron: r.grandListTotal - r.grandTotal,
+    economie_ron: ((cartState.ccDiscountPct > 0 && r.grandCcListTotal) ? r.grandCcListTotal : r.grandListTotal) - r.grandTotal,
     items: r.items.map(function(it) {
       var d = getDetails(it.offer.Laborator, it.displayName);
       return {
         denumire: it.displayName,
         laborator: it.offer.Laborator,
-        pret_lista: it.offer.Pret,
+        pret_lista: (it.ccListPrice != null && it.priceSource === "cc") ? it.ccListPrice : it.offer.Pret,
         pret_final: Math.round(it.finalPrice * 100) / 100,
         pret_sursa: it.priceSource,
-        discount: it.discount,
+        discount: (it.ccDiscountApplied > 0) ? it.ccDiscountApplied : it.discount,
+        cc_discount_applied: it.ccDiscountApplied || 0,
         timp: (it.offer.Timp && it.offer.Timp !== "N/A") ? it.offer.Timp : null,
         categorie: (it.offer.Categorie && it.offer.Categorie !== "N/A") ? it.offer.Categorie : null,
         detalii: d ? {
@@ -2742,16 +2811,17 @@ async function saveCerere(r) {
       };
     }),
     groups: r.groups.map(function(g) {
+      var listForGroup = (cartState.ccDiscountPct > 0 && g.ccListTotal) ? g.ccListTotal : g.listTotal;
       return {
         laborator: g.lab,
         numar_analize: g.items.length,
-        subtotal_lista: g.listTotal,
+        subtotal_lista: listForGroup,
         subtotal_final: g.total,
-        economie: g.listTotal - g.total
+        economie: listForGroup - g.total
       };
     }),
     eprubete: eprubete,
-    discounts: Object.assign({}, discounts)
+    discounts: Object.assign({}, discounts, cartState.ccDiscountPct > 0 ? { cc_discount_pct: cartState.ccDiscountPct } : {})
   };
 
   try {
@@ -5769,6 +5839,14 @@ function _loadPendingIntoCart(c) {
   // Mark this cerere as the pending one to update on save
   window.__loadedPendingCerereId = c.id;
   window.__loadedPendingProgId = c.programare_id || null;
+
+  // Extract CC discount from cerere.discounts (saved by pacient when creating pending)
+  var ccDisc = 0;
+  if (c.discounts && typeof c.discounts === "object") {
+    ccDisc = Number(c.discounts.cc_discount_pct) || 0;
+  }
+  cartState.ccDiscountPct = ccDisc;
+  console.log("[loadPending] CC discount from cerere:", ccDisc, "%");
 
   // Fill patient
   prenumeInput.value = c.pacient_prenume || "";
