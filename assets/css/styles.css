@@ -3261,3 +3261,16 @@ footer strong { color: var(--gold); }
   color: #92400e;
   border-radius: 4px;
 }
+
+.istoric-status-cas {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  background: rgba(26,107,60,0.15);
+  color: #155a32;
+  border-radius: 4px;
+}
