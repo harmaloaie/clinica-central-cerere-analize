@@ -1629,6 +1629,129 @@ document.getElementById("btnResetDisc").addEventListener("click", function() {
   if (browseState.lastResults.length) renderBrowseTable(browseState.lastResults);
 });
 
+// ─── CC Discount Map admin UI ───
+var ccDiscMapState = {
+  rows: [],   // [{ id, card_discount_pct, cc_discount_pct }]
+  loaded: false,
+  dirty: false
+};
+
+async function loadCcDiscountMapAdmin() {
+  try {
+    var res = await window.sb.from("cc_discount_map")
+      .select("id, card_discount_pct, cc_discount_pct")
+      .order("card_discount_pct", { ascending: true });
+    if (res.error) {
+      console.warn("[ccDiscMap] load error:", res.error);
+      document.getElementById("ccDiscMapStatus").textContent = "Eroare la incarcare";
+      document.getElementById("ccDiscMapStatus").style.color = "#c8392b";
+      return;
+    }
+    ccDiscMapState.rows = res.data || [];
+    ccDiscMapState.loaded = true;
+    ccDiscMapState.dirty = false;
+    renderCcDiscMap();
+    console.log("[ccDiscMap] loaded:", ccDiscMapState.rows);
+  } catch (e) {
+    console.warn("[ccDiscMap] exception:", e);
+  }
+}
+
+function renderCcDiscMap() {
+  var grid = document.getElementById("ccDiscMap");
+  if (!grid) return;
+  if (!ccDiscMapState.rows.length) {
+    grid.innerHTML = '<div style="font-size:12px;color:rgba(15,17,23,0.5);font-style:italic">Nicio mapare definita. Ruleaza migratia SQL pentru a o crea.</div>';
+    return;
+  }
+  var html = "";
+  for (var i = 0; i < ccDiscMapState.rows.length; i++) {
+    var r = ccDiscMapState.rows[i];
+    var cardLabel = Number(r.card_discount_pct) % 1 === 0
+      ? r.card_discount_pct + "%"
+      : Number(r.card_discount_pct).toFixed(1) + "%";
+    html += '<div class="disc-row">';
+    html += '<label><span class="dot" style="background:#b8973a"></span>Card ' + esc(cardLabel) + ' &rarr; CC</label>';
+    html += '<div class="disc-input-wrap"><input type="number" min="0" max="100" step="1" data-cc-row="' + r.id + '" value="' + r.cc_discount_pct + '"><span class="pct">%</span></div>';
+    html += '</div>';
+  }
+  grid.innerHTML = html;
+  var inputs = grid.querySelectorAll("input[data-cc-row]");
+  for (var j = 0; j < inputs.length; j++) {
+    (function(inp) {
+      inp.addEventListener("input", function() {
+        var v = parseFloat(inp.value);
+        if (isNaN(v)) v = 0;
+        v = Math.max(0, Math.min(100, v));
+        var id = parseInt(inp.getAttribute("data-cc-row"), 10);
+        var row = ccDiscMapState.rows.find(function(x) { return x.id === id; });
+        if (row) {
+          row.cc_discount_pct = v;
+          ccDiscMapState.dirty = true;
+          var status = document.getElementById("ccDiscMapStatus");
+          if (status) {
+            status.textContent = "Modificari nesalvate";
+            status.style.color = "#92400e";
+          }
+        }
+      });
+    })(inputs[j]);
+  }
+  var status = document.getElementById("ccDiscMapStatus");
+  if (status && !ccDiscMapState.dirty) {
+    status.textContent = "Incarcat";
+    status.style.color = "rgba(15,17,23,0.5)";
+  }
+}
+
+async function saveCcDiscountMap() {
+  var btn = document.getElementById("btnSaveCcDiscMap");
+  var status = document.getElementById("ccDiscMapStatus");
+  if (btn) { btn.disabled = true; btn.textContent = "Se salveaza..."; }
+  try {
+    // Update each row individually
+    for (var i = 0; i < ccDiscMapState.rows.length; i++) {
+      var r = ccDiscMapState.rows[i];
+      var res = await window.sb.from("cc_discount_map")
+        .update({ cc_discount_pct: Number(r.cc_discount_pct) || 0, updated_at: new Date().toISOString() })
+        .eq("id", r.id);
+      if (res.error) {
+        throw new Error(res.error.message || "Update esuat");
+      }
+    }
+    ccDiscMapState.dirty = false;
+    if (status) {
+      status.textContent = "Salvat";
+      status.style.color = "#1a6b3c";
+    }
+    console.log("[ccDiscMap] saved successfully");
+  } catch (e) {
+    console.error("[ccDiscMap] save error:", e);
+    if (status) {
+      status.textContent = "Eroare: " + (e.message || e);
+      status.style.color = "#c8392b";
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "\u2713 Salveaza modificarile"; }
+  }
+}
+
+// Wire save button
+var btnSaveCcDiscMap = document.getElementById("btnSaveCcDiscMap");
+if (btnSaveCcDiscMap) {
+  btnSaveCcDiscMap.addEventListener("click", saveCcDiscountMap);
+}
+
+// Load CC discount map on init (after window.sb is available)
+if (window.sb) {
+  loadCcDiscountMapAdmin();
+} else {
+  // Wait for sb to be ready
+  setTimeout(function() {
+    if (window.sb) loadCcDiscountMapAdmin();
+  }, 800);
+}
+
 // Browse search
 var qInput = document.getElementById("q");
 var labFilter = document.getElementById("labFilter");
