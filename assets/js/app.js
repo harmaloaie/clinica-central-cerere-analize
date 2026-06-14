@@ -2793,12 +2793,13 @@ function renderIstoric() {
     var fullName = [c.pacient_prenume, c.pacient_nume].filter(Boolean).join(" ").trim();
     var isPending = c.status === "pending";
     var pendingBadge = isPending ? ' <span class="istoric-status-pending">PENDING</span>' : '';
+    var casBadge = c.is_cas ? ' <span class="istoric-status-cas">🏥 CAS</span>' : '';
     html += '<div class="istoric-row" data-id="' + esc(c.id) + '">';
     html += '<div class="istoric-row-main">';
     if (fullName) {
-      html += '<div class="istoric-row-cnp">' + esc(fullName) + ' <small style="font-family:monospace;font-weight:400;color:rgba(15,17,23,0.5)">(' + esc(c.cnp_pacient) + ')</small>' + pendingBadge + '</div>';
+      html += '<div class="istoric-row-cnp">' + esc(fullName) + ' <small style="font-family:monospace;font-weight:400;color:rgba(15,17,23,0.5)">(' + esc(c.cnp_pacient) + ')</small>' + pendingBadge + casBadge + '</div>';
     } else {
-      html += '<div class="istoric-row-cnp">' + esc(c.cnp_pacient) + pendingBadge + '</div>';
+      html += '<div class="istoric-row-cnp">' + esc(c.cnp_pacient) + pendingBadge + casBadge + '</div>';
     }
     html += '<div class="istoric-row-meta">';
     html += '<span>' + esc(dateStr) + '</span>';
@@ -5046,6 +5047,7 @@ function renderProgramari() {
     if (p.bilet_url) metaParts.push('<span>&#128206; Bilet urcat</span>');
     if (p.cerere_id) metaParts.push('<span>&#128221; Cerere #' + p.cerere_id + '</span>');
     if (p.telefon_pacient) metaParts.push('<span>&#128241; ' + progEsc(p.telefon_pacient) + '</span>');
+    if (p.is_cas) metaParts.push('<span style="color:#155a32;font-weight:700">&#127973; CAS</span>');
 
     html += '<div class="' + cardClasses.join(" ") + '" data-prog-id="' + p.id + '">';
     html += '<div class="prog-date-box">';
