@@ -565,8 +565,15 @@
       </div>
 
       <div id="scanErrorArea" style="display:none">
-        <div class="scan-error" id="scanErrorText"></div>
-        <button type="button" class="scan-retry-btn" id="scanRetryBtn">Incearca din nou</button>
+        <div class="scan-preview" id="scanErrorPreview" style="display:none">
+          <img id="scanErrorImg" alt="Bilet">
+        </div>
+        <div class="scan-fallback-msg" id="scanErrorText">Nu am putut citi biletul automat. Poți reîncerca sau introduce datele manual citind biletul de mai sus.</div>
+        <div class="scan-fallback-actions">
+          <button type="button" class="scan-retry-btn" id="scanRetryBtn">Reîncearcă OCR</button>
+          <button type="button" class="scan-manual-btn" id="scanManualBtn">Introdu manual</button>
+        </div>
+        <button type="button" class="scan-altfoto-link" id="scanAltFotoBtn">Încarcă altă poză</button>
       </div>
     </div>
   </div>
@@ -617,6 +624,16 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- Bilet pin: ramane vizibil cand adminul introduce manual datele -->
+<div id="biletPin" style="display:none">
+  <div class="bilet-pin-head">
+    <span>Bilet de trimitere</span>
+    <button type="button" id="biletPinClose" aria-label="Inchide">&times;</button>
+  </div>
+  <img id="biletPinImg" alt="Bilet de trimitere">
+  <div class="bilet-pin-hint">Click pe imagine pentru mărire</div>
 </div>
 
 <footer>
