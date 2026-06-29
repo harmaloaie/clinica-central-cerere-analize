@@ -300,6 +300,109 @@ body {
 }
 .scan-retry-btn:hover { background: var(--gold); color: var(--ink); }
 
+/* ─── Fallback OCR (eroare curata) ─── */
+.scan-fallback-msg {
+  padding: 12px 16px;
+  background: rgba(184,151,58,0.1);
+  border-left: 3px solid var(--gold);
+  border-radius: 3px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+.scan-fallback-actions {
+  display: flex;
+  gap: 10px;
+}
+.scan-fallback-actions .scan-retry-btn { flex: 1; }
+.scan-manual-btn {
+  flex: 1;
+  padding: 10px 20px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.scan-manual-btn:hover { background: var(--ink); color: var(--paper); }
+.scan-altfoto-link {
+  display: block;
+  margin: 12px auto 0;
+  background: none;
+  border: none;
+  color: rgba(15,17,23,0.5);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.scan-altfoto-link:hover { color: var(--ink); }
+
+/* ─── Bilet pin (miniatura fixa pe timpul introducerii manuale) ─── */
+#biletPin {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  width: 230px;
+  background: var(--paper);
+  border: 1px solid rgba(15,17,23,0.15);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 30px rgba(15,17,23,0.25);
+  z-index: 1200;
+  overflow: hidden;
+}
+.bilet-pin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.bilet-pin-head button {
+  background: none;
+  border: none;
+  color: var(--paper);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+#biletPinImg {
+  width: 100%;
+  height: auto;
+  max-height: 240px;
+  object-fit: contain;
+  display: block;
+  cursor: zoom-in;
+  background: var(--cream);
+}
+.bilet-pin-hint {
+  font-size: 10px;
+  color: rgba(15,17,23,0.45);
+  text-align: center;
+  padding: 5px;
+}
+#biletPin.enlarged {
+  width: min(90vw, 700px);
+  bottom: 50%;
+  right: 50%;
+  transform: translate(50%, 50%);
+}
+#biletPin.enlarged #biletPinImg {
+  max-height: 80vh;
+  cursor: zoom-out;
+}
+
 /* Scan result */
 .scan-result-summary {
   margin-top: 14px;
