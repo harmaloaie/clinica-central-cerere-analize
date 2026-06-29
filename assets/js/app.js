@@ -2050,7 +2050,13 @@ document.getElementById("scanResultClose").addEventListener("click", function() 
 scanResultModal.addEventListener("click", function(e) {
   if (e.target === scanResultModal) scanResultModal.classList.remove("visible");
 });
-document.getElementById("scanRetryBtn").addEventListener("click", resetScanModal);
+document.getElementById("scanRetryBtn").addEventListener("click", retryOcr);
+document.getElementById("scanManualBtn").addEventListener("click", goManualFromScan);
+document.getElementById("scanAltFotoBtn").addEventListener("click", resetScanModal);
+document.getElementById("biletPinClose").addEventListener("click", closeBiletPin);
+document.getElementById("biletPinImg").addEventListener("click", function() {
+  document.getElementById("biletPin").classList.toggle("enlarged");
+});
 
 function resetScanModal() {
   scanPickerArea.style.display = "block";
@@ -2099,6 +2105,7 @@ async function handleScanFile(file) {
   document.getElementById("scanStatusSub").textContent = "Claude citeste imaginea si extrage datele";
 
   try {
+    window.__lastScan = { base64: base64Data, mediaType: mediaType };
     var extracted = await extractFromImage(base64Data, mediaType);
     showScanResults(extracted);
   } catch (e) {
@@ -2119,9 +2126,68 @@ function fileToBase64(file) {
 }
 
 function showScanError(msg) {
+  // Nu aratam eroarea tehnica utilizatorului; o logam doar in consola.
+  console.warn("[scan] OCR fallback:", msg);
   scanProcessingArea.style.display = "none";
+  scanPickerArea.style.display = "none";
   scanErrorArea.style.display = "block";
-  document.getElementById("scanErrorText").textContent = msg;
+
+  // Arata poza biletului (din preview) ca sa poata fi citita pentru introducerea manuala
+  var prevSrc = document.getElementById("scanPreviewImg").src;
+  var errImg = document.getElementById("scanErrorImg");
+  var errPrev = document.getElementById("scanErrorPreview");
+  if (prevSrc && prevSrc.indexOf("data:") === 0) {
+    errImg.src = prevSrc;
+    errPrev.style.display = "block";
+  } else {
+    errPrev.style.display = "none";
+  }
+
+  document.getElementById("scanErrorText").textContent =
+    "Nu am putut citi biletul automat. Poți reîncerca sau introduce datele manual citind biletul de mai sus.";
+}
+
+async function retryOcr() {
+  var last = window.__lastScan;
+  if (!last || !last.base64) { resetScanModal(); return; }
+  scanErrorArea.style.display = "none";
+  scanPickerArea.style.display = "none";
+  scanProcessingArea.style.display = "block";
+  document.getElementById("scanPreviewImg").src =
+    "data:" + (last.mediaType || "image/jpeg") + ";base64," + last.base64;
+  document.getElementById("scanStatusText").textContent = "Reîncerc procesarea...";
+  document.getElementById("scanStatusSub").textContent = "AI-ul citește biletul din nou";
+  try {
+    var extracted = await extractFromImage(last.base64, last.mediaType || "image/jpeg");
+    showScanResults(extracted);
+  } catch (e) {
+    showScanError("retry: " + (e.message || e));
+  }
+}
+
+function goManualFromScan() {
+  // Inchide modalul de scanare, lasa biletul vizibil intr-o miniatura fixa
+  var last = window.__lastScan;
+  var src = (last && last.base64)
+    ? "data:" + (last.mediaType || "image/jpeg") + ";base64," + last.base64
+    : (document.getElementById("scanPreviewImg").src || "");
+  scanModal.classList.remove("visible");
+  if (typeof switchView === "function") switchView("cart");
+  if (src && src.indexOf("data:") === 0) showBiletPin(src);
+}
+
+function showBiletPin(src) {
+  var pin = document.getElementById("biletPin");
+  if (!pin) return;
+  document.getElementById("biletPinImg").src = src;
+  pin.classList.remove("enlarged");
+  pin.style.display = "block";
+}
+function closeBiletPin() {
+  var pin = document.getElementById("biletPin");
+  if (!pin) return;
+  pin.style.display = "none";
+  pin.classList.remove("enlarged");
 }
 
 async function extractFromImage(base64Data, mediaType) {
@@ -2718,6 +2784,7 @@ async function handleBiletFromPhone(data) {
   showPairToast("Bilet primit de pe telefon", "Se analizeaza imaginea cu AI...");
 
   try {
+    window.__lastScan = { base64: data.imageBase64, mediaType: data.mediaType || "image/jpeg" };
     var extracted = await extractFromImage(data.imageBase64, data.mediaType || "image/jpeg");
     showScanResults(extracted);
   } catch (e) {
