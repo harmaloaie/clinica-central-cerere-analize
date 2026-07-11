@@ -514,6 +514,25 @@
 <!-- Stage ascuns pentru randarea copertei de rezultate (PDF) -->
 <div id="rezCoverStage" style="position:fixed;left:-99999px;top:0;pointer-events:none"></div>
 
+<!-- Preview rezultate generate (verificare înainte de PDF / trimitere) -->
+<div class="modal-overlay" id="rezPreviewModal">
+  <div class="modal-box rez-preview-box">
+    <button class="modal-close" id="rezPreviewClose" type="button" aria-label="Inchide">&times;</button>
+    <div class="modal-header">
+      <div class="modal-tag">Rezultate generate</div>
+      <h2 class="modal-title">Verifică rezultatele</h2>
+      <p style="font-size:13px;color:rgba(15,17,23,0.6);margin-top:6px">Verifică documentul de mai jos înainte de a-l descărca sau trimite.</p>
+    </div>
+    <div class="modal-body rez-preview-body">
+      <div id="rezPreviewDoc"></div>
+    </div>
+    <div class="rez-preview-actions">
+      <button type="button" class="rez-btn-send" id="rezBtnSend">Trimite rezultat</button>
+      <button type="button" class="rez-btn-pdf" id="rezBtnPdf">PDF</button>
+    </div>
+  </div>
+</div>
+
 <!-- Details modal (shared) -->
 <div class="modal-overlay" id="detailsModal">
   <div class="modal-box">
