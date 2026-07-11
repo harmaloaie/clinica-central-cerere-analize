@@ -3594,6 +3594,12 @@ function rezBuildCoverHtml(c) {
     return esc(lab) + dr;
   }).join(", ");
 
+  // Analizele solicitate în cerere (context, deasupra rezultatelor)
+  var cerute = (c.items || []).map(function(it){ return it.denumire; });
+  var rezCeruteHtml = cerute.length
+    ? cerute.map(function(d){ return '<span class="rez-cerut-chip">' + esc(d) + '</span>'; }).join("")
+    : '<span style="color:rgba(15,17,23,0.5)">—</span>';
+
   return '' +
   '<div class="rez-cover">' +
     '<div class="rez-cover-band">' +
@@ -3610,7 +3616,9 @@ function rezBuildCoverHtml(c) {
         '<div><div class="k">Email</div><div class="v">' + esc(c.pacient_email || "—") + '</div></div>' +
       '</div>' +
       '<div class="rez-cover-antet">Vă transmitem rezultatele analizelor efectuate prin Clinica Central.</div>' +
-      '<div class="rez-cover-st">Analize efectuate</div>' +
+      '<div class="rez-cover-st">Analize solicitate</div>' +
+      '<div class="rez-cover-cerute">' + rezCeruteHtml + '</div>' +
+      '<div class="rez-cover-st">Rezultate</div>' +
       '<table class="rez-cover-table"><thead><tr>' +
         '<th>Analiză</th><th>Rezultat</th><th>UM</th><th>Interval referință</th>' +
       '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
