@@ -3331,7 +3331,13 @@ function showIstoricDetail(id) {
       }
       html += '<li><span class="den">' + esc(it.denumire) + srcBadge + '</span><span class="prc">' + Math.round(it.pret_final) + ' RON</span></li>';
     }
-    html += '</ul></div>';
+    html += '</ul>';
+    html += '<div class="rez-lab-row" data-lab="' + esc(grp.laborator) + '">' +
+      '<button type="button" class="rez-add-btn">+ Adaugă rezultat</button>' +
+      '<input type="file" accept="application/pdf,image/*" style="display:none">' +
+      '<span class="rez-slot"></span>' +
+    '</div>';
+    html += '</div>';
   }
 
   // Eprubete summary
@@ -3352,7 +3358,16 @@ function showIstoricDetail(id) {
     html += '</ul>';
   }
 
+  // Sectiune Rezultate (procesare) — adaugata dupa eprubete, nu inlocuieste nimic
+  html += '<div class="istoric-detail-section-title">Rezultate</div>';
+  html += '<div class="rez-process-bar">' +
+    '<span class="rez-process-info" id="rezProcessInfo">Adaugă un rezultat de la cel puțin un laborator.</span>' +
+    '<button type="button" class="rez-process-btn" id="rezProcessBtn" disabled>Procesează rezultat</button>' +
+    '</div>';
+  html += '<div class="rez-status" id="rezStatus"></div>';
+
   body.innerHTML = html;
+  initRezultateUI(c);
   modal.classList.add("visible");
   document.body.style.overflow = "hidden";
 }
@@ -3368,6 +3383,304 @@ document.getElementById("istoricDetailClose").addEventListener("click", closeIst
 document.getElementById("istoricDetailModal").addEventListener("click", function(e){
   if (e.target === this) closeIstoricDetail();
 });
+
+// ═══════════════════════════════════════════════════════════════
+// REZULTATE — upload per laborator + template CC + Anexa 1
+// ═══════════════════════════════════════════════════════════════
+var rezCurrentCerere = null;
+var rezState = {}; // { laborator: { row: <db row> } }
+
+function rezLabSlug(lab) {
+  return String(lab || "lab").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "lab";
+}
+function rezExt(name, mime) {
+  var m = /\.([a-z0-9]+)$/i.exec(name || "");
+  if (m) return m[1].toLowerCase();
+  if ((mime || "").indexOf("pdf") >= 0) return "pdf";
+  if ((mime || "").indexOf("png") >= 0) return "png";
+  return "jpg";
+}
+function rezFileToBase64(file) {
+  return new Promise(function(resolve, reject) {
+    var r = new FileReader();
+    r.onload = function() { resolve(String(r.result).split(",")[1]); };
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function initRezultateUI(c) {
+  rezCurrentCerere = c;
+  rezState = {};
+
+  // Încarcă rezultatele deja salvate (ținute minte în DB)
+  try {
+    var res = await window.sb.from("cc_rezultate").select("*").eq("cerere_id", c.id);
+    if (!res.error && res.data) {
+      res.data.forEach(function(row) { rezState[row.laborator] = { row: row }; });
+    }
+  } catch (e) { console.warn("[rez] load", e); }
+
+  document.querySelectorAll("#istoricDetailBody .rez-lab-row").forEach(function(rowEl) {
+    var lab = rowEl.dataset.lab;
+    var btn = rowEl.querySelector(".rez-add-btn");
+    var input = rowEl.querySelector("input[type=file]");
+    btn.addEventListener("click", function() { input.click(); });
+    input.addEventListener("change", function() {
+      var f = input.files[0];
+      if (f) uploadRezultat(lab, f, rowEl);
+      input.value = "";
+    });
+    renderRezSlot(lab, rowEl);
+  });
+
+  var pbtn = document.getElementById("rezProcessBtn");
+  if (pbtn) pbtn.onclick = procesatRezultat;
+  refreshRezProcess();
+}
+
+function renderRezSlot(lab, rowEl) {
+  var slot = rowEl.querySelector(".rez-slot");
+  var st = rezState[lab];
+  var addBtn = rowEl.querySelector(".rez-add-btn");
+  if (st && st.row) {
+    var dr = st.row.doctor_nume ? (' · ' + esc(st.row.doctor_nume)) : '';
+    slot.innerHTML = '<span class="rez-tag">✓ ' + esc(st.row.file_name || "rezultat") + dr +
+      ' <span class="rez-rm" role="button">șterge</span></span>';
+    slot.querySelector(".rez-rm").addEventListener("click", function() { deleteRezultat(lab, rowEl); });
+    addBtn.textContent = "Înlocuiește";
+  } else {
+    slot.innerHTML = '';
+    addBtn.textContent = "+ Adaugă rezultat";
+  }
+}
+
+async function uploadRezultat(lab, file, rowEl) {
+  var status = document.getElementById("rezStatus");
+  var c = rezCurrentCerere;
+  if (!c || !window.sb) return;
+  status.textContent = "Se încarcă rezultatul pentru " + lab + "...";
+  try {
+    var ext = rezExt(file.name, file.type);
+    var path = c.id + "/" + rezLabSlug(lab) + "." + ext;
+
+    var up = await window.sb.storage.from("rezultate-lab").upload(path, file, {
+      upsert: true, contentType: file.type || "application/octet-stream"
+    });
+    if (up.error) throw up.error;
+
+    // Extragere automată medic/parafă (nu blocăm dacă eșuează)
+    var doctor_nume = null, parafa = null;
+    try {
+      var b64 = await rezFileToBase64(file);
+      var ocr = await window.sb.functions.invoke("ocr-rezultat", {
+        body: { fileBase64: b64, mediaType: file.type || "application/pdf" }
+      });
+      if (ocr && ocr.data) { doctor_nume = ocr.data.doctor_nume || null; parafa = ocr.data.parafa || null; }
+    } catch (e) { console.warn("[rez] ocr", e); }
+
+    var userId = (window.__CURRENT_USER__ && window.__CURRENT_USER__.id) || null;
+    var upsert = await window.sb.from("cc_rezultate").upsert({
+      cerere_id: c.id, laborator: lab, file_path: path,
+      file_name: file.name, mime: file.type || null,
+      doctor_nume: doctor_nume, parafa: parafa, uploaded_by: userId
+    }, { onConflict: "cerere_id,laborator" }).select().single();
+    if (upsert.error) throw upsert.error;
+
+    rezState[lab] = { row: upsert.data };
+    renderRezSlot(lab, rowEl);
+    refreshRezProcess();
+    status.textContent = "✓ Rezultat salvat pentru " + lab + (doctor_nume ? (" (medic: " + doctor_nume + ")") : "") + ".";
+  } catch (e) {
+    console.error("[rez] upload", e);
+    status.textContent = "Eroare la încărcare: " + (e.message || e);
+  }
+}
+
+async function deleteRezultat(lab, rowEl) {
+  var st = rezState[lab];
+  if (!st || !st.row) return;
+  if (!confirm("Ștergi rezultatul de la " + lab + "?")) return;
+  var status = document.getElementById("rezStatus");
+  try {
+    await window.sb.storage.from("rezultate-lab").remove([st.row.file_path]);
+    await window.sb.from("cc_rezultate").delete().eq("id", st.row.id);
+    delete rezState[lab];
+    renderRezSlot(lab, rowEl);
+    refreshRezProcess();
+    status.textContent = "Rezultat șters de la " + lab + ".";
+  } catch (e) {
+    status.textContent = "Eroare la ștergere: " + (e.message || e);
+  }
+}
+
+function refreshRezProcess() {
+  var n = Object.keys(rezState).length;
+  var btn = document.getElementById("rezProcessBtn");
+  var info = document.getElementById("rezProcessInfo");
+  if (btn) btn.disabled = n === 0;
+  if (info) info.textContent = n === 0
+    ? "Adaugă un rezultat de la cel puțin un laborator."
+    : n + " laborator" + (n === 1 ? "" : "e") + " cu rezultat. Se combină toate la procesare.";
+}
+
+function rezBuildCoverHtml(c) {
+  var fullName = [c.pacient_prenume, c.pacient_nume].filter(Boolean).join(" ").trim() || ("CNP " + c.cnp_pacient);
+  var tel = c.pacient_telefon_numar ? ((c.pacient_telefon_prefix || "") + " " + c.pacient_telefon_numar).trim() : "—";
+  var groups = c.groups || [];
+
+  var labsHtml = groups.map(function(g) {
+    var items = (c.items || []).filter(function(it) { return it.laborator === g.laborator; });
+    var hasRes = rezState[g.laborator] ? ' ✓ rezultat' : '';
+    return '<div class="rez-cover-lab"><div class="rez-cover-lab-name"><span>' + esc(g.laborator) + '</span>' +
+      '<span>' + items.length + ' analize' + hasRes + '</span></div><ul>' +
+      items.map(function(it) { return '<li><span>' + esc(it.denumire) + '</span></li>'; }).join("") +
+      '</ul></div>';
+  }).join("");
+
+  var labMedText = groups.map(function(g) {
+    var st = rezState[g.laborator];
+    var dr = st && st.row && st.row.doctor_nume ? (" (" + esc(st.row.doctor_nume) + ")") : "";
+    return esc(g.laborator) + dr;
+  }).join(", ");
+
+  var dateStr = new Date().toLocaleDateString("ro-RO");
+
+  return '' +
+  '<div class="rez-cover">' +
+    '<div class="rez-cover-band">' +
+      '<img src="assets/img/logo.jpg" alt="logo" crossorigin="anonymous">' +
+      '<div><div class="t1">Clinica Central</div><div class="t2">Buletin de rezultate analize</div></div>' +
+    '</div>' +
+    '<div class="rez-cover-in">' +
+      '<div class="rez-cover-h">Rezultatele analizelor</div>' +
+      '<div class="rez-cover-sub">Document generat: ' + esc(dateStr) + '</div>' +
+      '<div class="rez-cover-pat">' +
+        '<div><div class="k">Pacient</div><div class="v">' + esc(fullName) + '</div></div>' +
+        '<div><div class="k">CNP</div><div class="v">' + esc(c.cnp_pacient) + '</div></div>' +
+        '<div><div class="k">Telefon</div><div class="v">' + esc(tel) + '</div></div>' +
+        '<div><div class="k">Email</div><div class="v">' + esc(c.pacient_email || "—") + '</div></div>' +
+      '</div>' +
+      '<div class="rez-cover-antet">Vă transmitem centralizat rezultatele analizelor efectuate prin Clinica Central. Sumarul investigațiilor este mai jos, iar rezultatele complete (valorile de laborator) se regăsesc în <strong>Anexa 1</strong>, atașată la acest document.</div>' +
+      '<div class="rez-cover-st">Analize efectuate</div>' +
+      labsHtml +
+      '<div class="rez-cover-foot">' +
+        '<strong>Rezultatele au fost prelucrate în laboratoarele:</strong> ' + labMedText + '.' +
+        '<div class="anexa">Pentru vizualizarea rezultatelor directe (valori), consultați <strong>Anexa 1</strong> — rezultatele brute, în formatul primit de la laborator. La cerere, le putem furniza și pe email.</div>' +
+        '<div class="rez-cover-sign"><span>Clinica Central · Pitești</span><span>Semnătură / parafă: ______________________</span></div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+async function rezRenderCoverPages(c) {
+  var stage = document.getElementById("rezCoverStage");
+  stage.innerHTML = rezBuildCoverHtml(c);
+  var coverEl = stage.querySelector(".rez-cover");
+  await new Promise(function(res) { setTimeout(res, 100); });
+  var canvas = await html2canvas(coverEl, { scale: 2, backgroundColor: "#ffffff", useCORS: true });
+  stage.innerHTML = "";
+  var pageW = canvas.width;
+  var pageH = Math.round(pageW * (297 / 210));
+  var pages = [];
+  var y = 0;
+  while (y < canvas.height) {
+    var sliceH = Math.min(pageH, canvas.height - y);
+    var tmp = document.createElement("canvas");
+    tmp.width = pageW; tmp.height = pageH;
+    var ctx = tmp.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, pageW, pageH);
+    ctx.drawImage(canvas, 0, y, pageW, sliceH, 0, 0, pageW, sliceH);
+    pages.push(tmp.toDataURL("image/png"));
+    y += pageH;
+  }
+  return pages;
+}
+
+async function procesatRezultat() {
+  var c = rezCurrentCerere;
+  var status = document.getElementById("rezStatus");
+  var btn = document.getElementById("rezProcessBtn");
+  if (!c) return;
+  btn.disabled = true;
+  status.textContent = "Se generează coperta...";
+
+  try {
+    var PDFDocument = PDFLib.PDFDocument, StandardFonts = PDFLib.StandardFonts, rgb = PDFLib.rgb;
+    var A4 = [595.28, 841.89];
+    var out = await PDFDocument.create();
+    var helv = await out.embedFont(StandardFonts.Helvetica);
+    var helvB = await out.embedFont(StandardFonts.HelveticaBold);
+
+    // 1) Coperta CC
+    var coverPages = await rezRenderCoverPages(c);
+    for (var i = 0; i < coverPages.length; i++) {
+      var png = await out.embedPng(coverPages[i]);
+      out.addPage(A4).drawImage(png, { x: 0, y: 0, width: A4[0], height: A4[1] });
+    }
+
+    // 2) Separator ANEXA 1
+    status.textContent = "Se descarcă și se combină rezultatele...";
+    var labs = Object.keys(rezState);
+    var sep = out.addPage(A4);
+    sep.drawText("ANEXA 1", { x: 60, y: A4[1] - 140, size: 34, font: helvB, color: rgb(0.06, 0.07, 0.09) });
+    sep.drawText("Rezultate brute primite de la laboratoare", { x: 60, y: A4[1] - 170, size: 13, font: helv, color: rgb(0.4, 0.4, 0.4) });
+    sep.drawRectangle({ x: 60, y: A4[1] - 185, width: 200, height: 3, color: rgb(0.10, 0.42, 0.24) });
+    var yy = A4[1] - 230;
+    labs.forEach(function(lab) { sep.drawText("- " + lab, { x: 60, y: yy, size: 12, font: helv, color: rgb(0.2, 0.2, 0.2) }); yy -= 20; });
+
+    // 3) Fiecare rezultat brut (download din storage)
+    for (var li = 0; li < labs.length; li++) {
+      var lab = labs[li];
+      var row = rezState[lab].row;
+      var dl = await window.sb.storage.from("rezultate-lab").download(row.file_path);
+      if (dl.error || !dl.data) {
+        out.addPage(A4).drawText("Nu am putut descarca: " + lab, { x: 60, y: A4[1] - 100, size: 12, font: helv, color: rgb(0.78, 0.22, 0.17) });
+        continue;
+      }
+      var buf = await dl.data.arrayBuffer();
+      var isPdf = (row.mime || "").indexOf("pdf") >= 0 || /\.pdf$/i.test(row.file_name || "") || /\.pdf$/i.test(row.file_path || "");
+      if (isPdf) {
+        try {
+          var src = await PDFDocument.load(buf, { ignoreEncryption: true });
+          var copied = await out.copyPages(src, src.getPageIndices());
+          copied.forEach(function(p) { out.addPage(p); });
+        } catch (e) {
+          out.addPage(A4).drawText("PDF necorporabil: " + lab, { x: 60, y: A4[1] - 100, size: 12, font: helv, color: rgb(0.78, 0.22, 0.17) });
+        }
+      } else {
+        try {
+          var img;
+          if ((row.mime || "").indexOf("png") >= 0 || /\.png$/i.test(row.file_path || "")) img = await out.embedPng(buf);
+          else img = await out.embedJpg(buf);
+          var pg = out.addPage(A4);
+          var sc = Math.min((A4[0] - 80) / img.width, (A4[1] - 120) / img.height);
+          var w = img.width * sc, h = img.height * sc;
+          pg.drawText("Rezultat - " + lab, { x: 40, y: A4[1] - 50, size: 11, font: helvB, color: rgb(0.3, 0.3, 0.3) });
+          pg.drawImage(img, { x: (A4[0] - w) / 2, y: (A4[1] - h) / 2 - 20, width: w, height: h });
+        } catch (e) {
+          out.addPage(A4).drawText("Imagine necorporabila: " + lab, { x: 60, y: A4[1] - 100, size: 12, font: helv, color: rgb(0.78, 0.22, 0.17) });
+        }
+      }
+    }
+
+    status.textContent = "Se salvează PDF-ul...";
+    var bytes = await out.save();
+    var blob = new Blob([bytes], { type: "application/pdf" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "Rezultate-CC-" + (c.cnp_pacient || "pacient") + ".pdf";
+    a.click();
+    setTimeout(function() { URL.revokeObjectURL(url); }, 4000);
+    status.textContent = "✓ PDF generat (copertă + Anexa 1). Verifică descărcarea.";
+  } catch (e) {
+    console.error("[rez] process", e);
+    status.textContent = "Eroare: " + (e.message || e);
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 document.getElementById("istoricSearchCnp").addEventListener("input", function(e) {
   // Accept any input (digits for CNP, letters for name)
