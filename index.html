@@ -13,6 +13,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.0/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 <body>
@@ -508,6 +510,9 @@
     <div class="modal-body" id="istoricDetailBody"></div>
   </div>
 </div>
+
+<!-- Stage ascuns pentru randarea copertei de rezultate (PDF) -->
+<div id="rezCoverStage" style="position:fixed;left:-99999px;top:0;pointer-events:none"></div>
 
 <!-- Details modal (shared) -->
 <div class="modal-overlay" id="detailsModal">
