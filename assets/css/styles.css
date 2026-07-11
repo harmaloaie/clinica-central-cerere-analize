@@ -3470,3 +3470,60 @@ footer strong { color: var(--gold); }
 .rez-cover-foot strong { color: #0f1117; }
 .rez-cover-foot .anexa { background: rgba(184,151,58,0.1); border: 1px solid rgba(184,151,58,0.35); border-radius: 3px; padding: 10px 14px; margin-top: 10px; color: #5a4f18; }
 .rez-cover-sign { display: flex; justify-content: space-between; margin-top: 22px; font-size: 11px; color: rgba(15,17,23,0.5); }
+
+/* ─── Rezultate v2: spinner, tabel, preview ─── */
+.rez-spinner {
+  width: 14px; height: 14px; display: inline-block; vertical-align: middle;
+  border: 2px solid rgba(15,17,23,0.15); border-top-color: #1a6b3c;
+  border-radius: 50%; animation: rezspin 0.8s linear infinite; margin-right: 8px;
+}
+@keyframes rezspin { to { transform: rotate(360deg); } }
+.rez-loading-txt { font-size: 12px; color: rgba(15,17,23,0.6); }
+
+.rez-btn-group { display: flex; gap: 8px; }
+.rez-view-btn {
+  padding: 12px 18px; background: #fff; color: var(--ink);
+  border: 1.5px solid var(--ink); border-radius: var(--radius);
+  font-family: inherit; font-size: 13px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer;
+}
+.rez-view-btn:hover:not(:disabled) { background: var(--ink); color: #fff; }
+.rez-view-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ─── Tabel rezultate în template (100% CC) ─── */
+.rez-cover-table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+.rez-cover-table thead th {
+  text-align: left; font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  letter-spacing: 0.08em; text-transform: uppercase; color: rgba(15,17,23,0.55);
+  font-weight: 600; padding: 6px 8px; border-bottom: 1.5px solid #0f1117;
+}
+.rez-cover-table thead th:nth-child(2), .rez-cover-table thead th:nth-child(3) { text-align: right; }
+.rez-cover-table tbody td { padding: 6px 8px; border-bottom: 1px solid rgba(15,17,23,0.08); font-size: 12.5px; vertical-align: top; }
+.rez-td-den { color: #0f1117; font-weight: 500; }
+.rez-td-val { text-align: right; font-family: 'JetBrains Mono', monospace; font-weight: 700; white-space: nowrap; }
+.rez-td-val.rez-hi { color: #c8392b; }
+.rez-td-val.rez-lo { color: #b8973a; }
+.rez-td-um { text-align: right; color: rgba(15,17,23,0.55); font-size: 11px; white-space: nowrap; }
+.rez-td-int { color: rgba(15,17,23,0.55); font-size: 11px; }
+.rez-note { font-size: 11px; color: rgba(15,17,23,0.6); margin-top: 10px; line-height: 1.5; font-style: italic; }
+
+/* ─── Modal preview rezultate ─── */
+.rez-preview-box { max-width: 900px; width: 100%; }
+.rez-preview-body { overflow: auto; max-height: 62vh; background: var(--cream); padding: 20px; border-radius: var(--radius); }
+#rezPreviewDoc .rez-cover { margin: 0 auto; box-shadow: 0 8px 30px rgba(15,17,23,0.18); }
+.rez-preview-actions {
+  display: flex; justify-content: flex-end; gap: 10px;
+  margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(15,17,23,0.12);
+}
+.rez-btn-pdf {
+  padding: 12px 26px; background: #1a6b3c; color: #fff; border: none;
+  border-radius: var(--radius); font-family: inherit; font-size: 13px; font-weight: 700;
+  letter-spacing: 0.05em; text-transform: uppercase; cursor: pointer;
+}
+.rez-btn-pdf:hover { background: #14562f; }
+.rez-btn-send {
+  padding: 12px 22px; background: #fff; color: var(--ink); border: 1.5px solid var(--ink);
+  border-radius: var(--radius); font-family: inherit; font-size: 13px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; cursor: pointer;
+}
+.rez-btn-send:hover { background: var(--ink); color: #fff; }
