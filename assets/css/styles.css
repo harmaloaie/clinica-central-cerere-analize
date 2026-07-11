@@ -3377,3 +3377,96 @@ footer strong { color: var(--gold); }
   color: #155a32;
   border-radius: 4px;
 }
+
+/* ═══════════════════════════════════════════════════════════════ */
+/* REZULTATE — upload per laborator + template CC (feature nou)     */
+/* ═══════════════════════════════════════════════════════════════ */
+.rez-lab-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(15,17,23,0.12);
+}
+.rez-add-btn {
+  padding: 7px 13px;
+  background: #fff;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.rez-add-btn:hover { background: var(--ink); color: var(--paper); }
+.rez-tag {
+  font-size: 12px;
+  color: #1a6b3c;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.rez-rm {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 11px;
+  font-weight: 500;
+}
+.rez-process-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.rez-process-info { font-size: 12px; color: rgba(15,17,23,0.55); }
+.rez-process-btn {
+  padding: 12px 22px;
+  background: #1a6b3c;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.rez-process-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.rez-status {
+  margin-top: 12px;
+  font-size: 12px;
+  color: rgba(15,17,23,0.65);
+  min-height: 16px;
+}
+
+/* ─── Template copertă (randat de html2canvas, off-screen) ─── */
+.rez-cover { width: 794px; background: #fff; color: #0f1117; font-family: 'DM Sans', sans-serif; }
+.rez-cover-band { background: #0f1117; color: #fff; padding: 26px 40px; border-bottom: 4px solid #1a6b3c; display: flex; align-items: center; gap: 20px; }
+.rez-cover-band img { height: 64px; width: auto; background: #fff; border-radius: 4px; padding: 4px; }
+.rez-cover-band .t1 { font-family: 'DM Serif Display', serif; font-size: 26px; line-height: 1; }
+.rez-cover-band .t2 { font-size: 12px; letter-spacing: 0.14em; color: #b8973a; margin-top: 6px; text-transform: uppercase; }
+.rez-cover-in { padding: 32px 40px 40px; }
+.rez-cover-h { font-family: 'DM Serif Display', serif; font-size: 22px; margin-bottom: 4px; }
+.rez-cover-sub { font-size: 12px; color: rgba(15,17,23,0.5); margin-bottom: 22px; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.05em; }
+.rez-cover-pat { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; background: #f8f6f1; border-left: 3px solid #1a6b3c; border-radius: 3px; padding: 16px 20px; margin-bottom: 24px; font-size: 13px; }
+.rez-cover-pat .k { color: rgba(15,17,23,0.5); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.rez-cover-pat .v { font-weight: 600; margin-bottom: 6px; }
+.rez-cover-antet { font-size: 13px; line-height: 1.65; color: rgba(15,17,23,0.8); margin-bottom: 22px; }
+.rez-cover-st { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #1a6b3c; font-weight: 700; border-bottom: 1px solid rgba(15,17,23,0.12); padding-bottom: 6px; margin-bottom: 12px; }
+.rez-cover-lab { margin-bottom: 16px; }
+.rez-cover-lab-name { font-weight: 700; font-size: 14px; margin-bottom: 6px; display: flex; justify-content: space-between; }
+.rez-cover-lab-name span:last-child { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: rgba(15,17,23,0.45); font-weight: 400; }
+.rez-cover-lab ul { list-style: none; font-size: 13px; margin: 0; padding: 0; }
+.rez-cover-lab li { padding: 4px 0; border-bottom: 1px dotted rgba(15,17,23,0.1); display: flex; justify-content: space-between; color: rgba(15,17,23,0.8); }
+.rez-cover-foot { margin-top: 28px; padding-top: 16px; border-top: 2px solid #0f1117; font-size: 11.5px; line-height: 1.6; color: rgba(15,17,23,0.7); }
+.rez-cover-foot strong { color: #0f1117; }
+.rez-cover-foot .anexa { background: rgba(184,151,58,0.1); border: 1px solid rgba(184,151,58,0.35); border-radius: 3px; padding: 10px 14px; margin-top: 10px; color: #5a4f18; }
+.rez-cover-sign { display: flex; justify-content: space-between; margin-top: 22px; font-size: 11px; color: rgba(15,17,23,0.5); }
