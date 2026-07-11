@@ -3653,14 +3653,34 @@ async function downloadRezultatPdf() {
   btn.disabled = true; btn.textContent = "Se generează...";
   try {
     var canvas = await html2canvas(coverEl, { scale: 2, backgroundColor: "#ffffff", useCORS: true });
+    var srcCtx = canvas.getContext("2d");
     var PDFDocument = PDFLib.PDFDocument;
     var A4 = [595.28, 841.89];
     var out = await PDFDocument.create();
     var pageW = canvas.width;
     var pageH = Math.round(pageW * (297 / 210));
+
+    // Detectează un rând (aproape) alb — pentru a tăia paginile în spațiul dintre rânduri
+    function rowIsWhite(yy) {
+      try {
+        var d = srcCtx.getImageData(0, yy, pageW, 1).data;
+        for (var i = 0; i < d.length; i += 32) {
+          if (d[i] < 244 || d[i + 1] < 244 || d[i + 2] < 244) return false;
+        }
+        return true;
+      } catch (e) { return true; }
+    }
+    // Caută în sus de la limita paginii o linie albă unde e sigur să tăiem
+    function safeCut(target, minY) {
+      for (var yy = target; yy > minY; yy--) { if (rowIsWhite(yy)) return yy; }
+      return target; // dacă nu găsim spațiu alb, taie la limită (rar)
+    }
+
     var y = 0;
     while (y < canvas.height) {
-      var sliceH = Math.min(pageH, canvas.height - y);
+      var target = Math.min(y + pageH, canvas.height);
+      var cut = (target >= canvas.height) ? canvas.height : safeCut(target, y + Math.floor(pageH * 0.5));
+      var sliceH = cut - y;
       var tmp = document.createElement("canvas");
       tmp.width = pageW; tmp.height = pageH;
       var ctx = tmp.getContext("2d");
@@ -3668,7 +3688,7 @@ async function downloadRezultatPdf() {
       ctx.drawImage(canvas, 0, y, pageW, sliceH, 0, 0, pageW, sliceH);
       var png = await out.embedPng(tmp.toDataURL("image/png"));
       out.addPage(A4).drawImage(png, { x: 0, y: 0, width: A4[0], height: A4[1] });
-      y += pageH;
+      y = cut;
     }
     var bytes = await out.save();
     var blob = new Blob([bytes], { type: "application/pdf" });
