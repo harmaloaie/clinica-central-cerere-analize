@@ -3635,6 +3635,8 @@ function rezBuildCoverHtml(c) {
 function openRezPreview(c) {
   if (!c) return;
   document.getElementById("rezPreviewDoc").innerHTML = rezBuildCoverHtml(c);
+  var emailEl = document.getElementById("rezSendEmail");
+  if (emailEl) emailEl.value = c.pacient_email || "";
   document.getElementById("rezPreviewModal").classList.add("visible");
   document.body.style.overflow = "hidden";
 }
@@ -3713,8 +3715,37 @@ async function downloadRezultatPdf() {
   var pdfBtn = document.getElementById("rezBtnPdf");
   if (pdfBtn) pdfBtn.addEventListener("click", downloadRezultatPdf);
   var sendBtn = document.getElementById("rezBtnSend");
-  if (sendBtn) sendBtn.addEventListener("click", function(){
-    alert("Trimite rezultat — functie in curand.\nVa notifica pacientul pe email că rezultatele sunt disponibile în aplicație, cu link către login / creare cont.");
+  if (sendBtn) sendBtn.addEventListener("click", async function(){
+    var c = rezCurrentCerere;
+    if (!c) return;
+    var emailEl = document.getElementById("rezSendEmail");
+    var email = (emailEl && emailEl.value || "").trim();
+    if (!email || email.indexOf("@") < 1) {
+      alert("Introdu emailul pacientului pentru a trimite rezultatul.");
+      if (emailEl) emailEl.focus();
+      return;
+    }
+    var orig = sendBtn.textContent;
+    sendBtn.disabled = true; sendBtn.textContent = "Se trimite...";
+    try {
+      // 1. asigură contul pacientului (creează dacă nu există, activ, fără aprobare)
+      var ens = await window.sb.rpc("ensure_pacient_from_cerere", { p_cerere_id: c.id, p_email: email });
+      if (ens.error) throw ens.error;
+      // 2. trimite emailul cu link către Cardul Păun
+      var nume = [c.pacient_prenume, c.pacient_nume].filter(Boolean).join(" ").trim();
+      var snd = await window.sb.functions.invoke("send-rezultat-email", {
+        body: { email: email, nume: nume, loginUrl: "https://carduri.clinicacentral.ro/pacient.html#rezultate" }
+      });
+      if (snd.error) throw snd.error;
+      if (snd.data && snd.data.error) throw new Error(typeof snd.data.error === "string" ? snd.data.error : "trimitere esuata");
+      var created = ens.data && ens.data.created;
+      alert("✓ Rezultat trimis pe email la " + email + (created ? "\n(Cont nou creat automat pentru pacient.)" : ""));
+    } catch (e) {
+      console.error("[rez] trimite", e);
+      alert("Eroare la trimitere: " + (e.message || e));
+    } finally {
+      sendBtn.disabled = false; sendBtn.textContent = orig;
+    }
   });
 })();
 
