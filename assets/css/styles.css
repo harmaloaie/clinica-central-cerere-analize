@@ -3512,9 +3512,20 @@ footer strong { color: var(--gold); }
 .rez-preview-body { overflow: auto; max-height: 62vh; background: var(--cream); padding: 20px; border-radius: var(--radius); }
 #rezPreviewDoc .rez-cover { margin: 0 auto; box-shadow: 0 8px 30px rgba(15,17,23,0.18); }
 .rez-preview-actions {
-  display: flex; justify-content: flex-end; gap: 10px;
+  display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap;
   margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(15,17,23,0.12);
 }
+.rez-send-email { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 200px; }
+.rez-send-email label {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: rgba(15,17,23,0.55); font-weight: 600;
+}
+.rez-send-email input {
+  padding: 10px 12px; border: 1.5px solid rgba(15,17,23,0.25); border-radius: var(--radius);
+  font-family: inherit; font-size: 13px; background: #fff; outline: none;
+}
+.rez-send-email input:focus { border-color: var(--ink); }
+.rez-preview-btns { display: flex; gap: 10px; }
 .rez-btn-pdf {
   padding: 12px 26px; background: #1a6b3c; color: #fff; border: none;
   border-radius: var(--radius); font-family: inherit; font-size: 13px; font-weight: 700;
