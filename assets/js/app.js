@@ -1141,6 +1141,11 @@ function openReport() {
   }
   body += '</div>';
 
+  body += '<label class="report-cas-row" style="display:flex;align-items:center;gap:12px;padding:14px 16px;margin:10px 0 6px;background:rgba(21,90,50,0.07);border:1px solid rgba(21,90,50,0.25);border-radius:8px;font-size:14px;color:#155a32;font-weight:600;cursor:pointer">' +
+    '<input type="checkbox" id="reportCasCheckbox" style="width:20px;height:20px;accent-color:#155a32;cursor:pointer;flex-shrink:0">' +
+    '<span>Confirma daca cererea este prin CAS sau trebuie facturata la client.</span>' +
+    '</label>';
+
   body += '<div class="report-actions">';
   body += '<button class="report-btn primary" id="btnExportPdf">&#11015; Genereaza document</button>';
   body += '<button class="report-btn" id="btnExportReport">&#11015; Export Excel</button>';
@@ -1157,9 +1162,22 @@ function openReport() {
   document.getElementById("btnExportReport").addEventListener("click", function() { exportReportXlsx(r); });
   document.getElementById("btnExportJson").addEventListener("click", function() { exportReportJson(r); });
 
+  var reportCas = document.getElementById("reportCasCheckbox");
+  if (reportCas) {
+    reportCas.checked = !!cartState.is_cas;
+    reportCas.addEventListener("change", function() {
+      cartState.is_cas = reportCas.checked;
+      renderCart();
+      openReport(); // re-randează cu prețurile noi; salvarea actualizează aceeași cerere
+    });
+  }
+
   // Auto-save the cerere to Supabase (non-blocking, but show status)
   // Save returned saveCerere promise so PDF generators can await numar_ordine
-  window.__currentCerereSavePromise = saveCerere(r);
+  window.__currentCerereSavePromise = saveCerere(r).then(function(saved) {
+    if (saved && saved.id) window.__loadedPendingCerereId = saved.id;
+    return saved;
+  });
 }
 function closeReport() {
   document.getElementById("reportOverlay").classList.remove("visible");
@@ -1168,6 +1186,9 @@ function closeReport() {
   // Reset complet — start fresh pentru urmatoarea cerere
   // 1. Cart
   cartState.cart = [];
+  window.__loadedPendingCerereId = null;
+  window.__loadedPendingProgId = null;
+  cartState.is_cas = false;
   // 2. Patient fields
   cartState.prenume = "";
   cartState.nume = "";
