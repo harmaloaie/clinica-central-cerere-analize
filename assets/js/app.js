@@ -82,6 +82,10 @@ function getCCPrice(denumire) {
 // CC discount (cartState.ccDiscountPct) is applied when source="cc" — adminul vede
 // pretul cu discountul CC al pacientului (din card) aplicat.
 function effectivePrice(denumire, laborator, pretLista) {
+  // Cerere CAS (decontată) → preț 0 pentru toate analizele
+  if (cartState && cartState.is_cas) {
+    return { price: 0, source: "cas", listPrice: 0, ccDiscount: 0 };
+  }
   var cc = getCCPrice(denumire);
   if (cc !== null) {
     // CC pricing path - apply CC discount if active (from pacient card)
@@ -324,6 +328,8 @@ var cartState = {
   dataNasterii: "",    // DD.MM.YYYY, from OCR or CNP
   // CC discount (from pacient card, applied to CC prices in cart total)
   ccDiscountPct: 0,    // 0 = no CC discount (no card or non-matching card discount)
+  // CAS: cerere decontată → preț 0 la toate analizele
+  is_cas: false,
   // Validation flags
   prenumeValid: false,
   numeValid: false,
@@ -788,7 +794,7 @@ function renderCart() {
     var c = cartState.cart[i];
     var offer = c.offer;
     if (!offer) continue;
-    var fp = finalPrice(offer.Pret, offer.Laborator);
+    var fp = cartState.is_cas ? 0 : finalPrice(offer.Pret, offer.Laborator);
     var lab = offer.Laborator;
     var disc = discPct(lab);
     total += fp;
@@ -833,7 +839,15 @@ function renderCart() {
       '</div>';
   }
 
-  cartListEl.innerHTML = ccBannerHtml + html;
+  var casBannerHtml = '';
+  if (cartState.is_cas) {
+    casBannerHtml = '<div style="padding:10px 14px;background:rgba(21,90,50,0.1);border:1px solid rgba(21,90,50,0.3);border-radius:4px;margin-bottom:10px;font-size:12px;color:#155a32">' +
+      '<strong>🏥 Cerere CAS (decontată)</strong> — toate analizele au preț 0 pentru pacient.</div>';
+  }
+  var casCbSync = document.getElementById("casCheckbox");
+  if (casCbSync) casCbSync.checked = !!cartState.is_cas;
+
+  cartListEl.innerHTML = casBannerHtml + ccBannerHtml + html;
   cartTotalEl.textContent = fmtRon(total);
 
   // Wire CC discount clear button (if rendered)
@@ -891,11 +905,20 @@ function renderCart() {
   }
 }
 
+(function(){
+  var casCbWire = document.getElementById("casCheckbox");
+  if (casCbWire) casCbWire.addEventListener("change", function(){
+    cartState.is_cas = casCbWire.checked;
+    renderCart();
+  });
+})();
+
 document.getElementById("btnClearCart").addEventListener("click", function() {
   if (cartState.cart.length === 0) return;
   if (confirm("Vrei sa golesti cererea de analize?")) {
     cartState.cart = [];
     cartState.ccDiscountPct = 0;  // reset CC discount
+    cartState.is_cas = false;     // reset CAS
     window.__loadedPendingCerereId = null;
     window.__loadedPendingProgId = null;
     renderCart();
@@ -2849,6 +2872,7 @@ async function saveCerere(r) {
     numar_eprubete: totalEprubete,
     total_lista_ron: (cartState.ccDiscountPct > 0 && r.grandCcListTotal) ? r.grandCcListTotal : r.grandListTotal,
     total_final_ron: r.grandTotal,
+    is_cas: !!cartState.is_cas,
     economie_ron: ((cartState.ccDiscountPct > 0 && r.grandCcListTotal) ? r.grandCcListTotal : r.grandListTotal) - r.grandTotal,
     items: r.items.map(function(it) {
       var d = getDetails(it.offer.Laborator, it.displayName);
@@ -3225,6 +3249,7 @@ function cerereNouaDinIstoric(id) {
   cartState.email = c.pacient_email || "";
   cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
   cartState.telefonNumar = c.pacient_telefon_numar || "";
+  cartState.is_cas = !!c.is_cas;
   cartState.cart = [];
   updateNumeField(prenumeInput, "prenume");
   updateNumeField(numeInput, "nume");
@@ -3249,6 +3274,7 @@ function aceeasiCerereDinIstoric(id) {
   cartState.email = c.pacient_email || "";
   cartState.telefonPrefix = c.pacient_telefon_prefix || "+40";
   cartState.telefonNumar = c.pacient_telefon_numar || "";
+  cartState.is_cas = !!c.is_cas;
   // Rebuild cart from saved items — re-resolve current best offer for each analiza
   cartState.cart = [];
   var notFound = [];
@@ -6289,6 +6315,8 @@ function _loadPendingIntoCart(c) {
   }
   cartState.ccDiscountPct = ccDisc;
   console.log("[loadPending] CC discount from cerere:", ccDisc, "%");
+  // Pre-bifează CAS din cererea clientului (adminul poate debifa)
+  cartState.is_cas = !!c.is_cas;
 
   // Fill patient
   prenumeInput.value = c.pacient_prenume || "";
